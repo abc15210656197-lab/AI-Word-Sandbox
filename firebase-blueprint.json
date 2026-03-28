@@ -1,0 +1,56 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Stores user profile information and preferences.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "lastLogin": { "type": "string", "format": "date-time" },
+        "theme": { "type": "string", "enum": ["light", "dark"] }
+      },
+      "required": ["uid", "email"]
+    },
+    "LoginHistory": {
+      "title": "Login History",
+      "description": "Records of user login events.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "userAgent": { "type": "string" },
+        "ip": { "type": "string" }
+      },
+      "required": ["uid", "timestamp"]
+    },
+    "Document": {
+      "title": "User Document",
+      "description": "Stores document states created by the user.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "title": { "type": "string" },
+        "content": { "type": "string", "description": "JSON string of DocumentState" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "title", "content"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": "User",
+      "description": "User profile documents"
+    },
+    "/users/{uid}/loginHistory/{historyId}": {
+      "schema": "LoginHistory",
+      "description": "User login history subcollection"
+    },
+    "/users/{uid}/documents/{docId}": {
+      "schema": "Document",
+      "description": "User saved documents"
+    }
+  }
+}

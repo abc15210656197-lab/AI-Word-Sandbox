@@ -1,0 +1,5 @@
+{
+  "name": "AI Word Sandbox",
+  "description": "An AI-powered Word document editor that allows you to create and edit documents through conversation and export them as .docx files.",
+  "requestFramePermissions": []
+}

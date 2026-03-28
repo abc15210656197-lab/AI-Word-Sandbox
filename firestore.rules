@@ -1,0 +1,81 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    // Collection: /users/{uid}
+    // Fields: uid, email, displayName, photoURL, lastLogin, theme
+    //
+    // Collection: /users/{uid}/loginHistory/{historyId}
+    // Fields: uid, timestamp, userAgent, ip
+    //
+    // Collection: /users/{uid}/documents/{docId}
+    // Fields: uid, title, content, updatedAt
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email']) &&
+             data.uid == request.auth.uid &&
+             isValidEmail(data.email) &&
+             (data.get('displayName', '') is string) &&
+             (data.get('theme', 'light') in ['light', 'dark']);
+    }
+
+    function isValidLoginHistory(data) {
+      return data.keys().hasAll(['uid', 'timestamp']) &&
+             data.uid == request.auth.uid &&
+             data.timestamp is string;
+    }
+
+    function isValidDocument(data) {
+      return data.keys().hasAll(['uid', 'title', 'content']) &&
+             data.uid == request.auth.uid &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 255 &&
+             data.content is string && data.content.size() < 1000000;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "abc15210656197@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{uid} {
+      allow read: if isOwner(uid) || isAdmin();
+      allow create: if isOwner(uid) && isValidUser(request.resource.data);
+      allow update: if isOwner(uid) && isValidUser(request.resource.data);
+
+      match /loginHistory/{historyId} {
+        allow read: if isOwner(uid) || isAdmin();
+        allow create: if isOwner(uid) && isValidLoginHistory(request.resource.data);
+      }
+
+      match /documents/{docId} {
+        allow read: if isOwner(uid) || isAdmin();
+        allow create: if isOwner(uid) && isValidDocument(request.resource.data);
+        allow update: if isOwner(uid) && isValidDocument(request.resource.data);
+        allow delete: if isOwner(uid) || isAdmin();
+      }
+    }
+  }
+}
