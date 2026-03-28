@@ -30,7 +30,16 @@ import {
   Copy,
   RotateCcw,
   Check,
-  Palette
+  Palette,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
+  AlignJustify,
+  List,
+  ListOrdered,
+  Bold,
+  Italic,
+  Trash
 } from "lucide-react";
 import Markdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -160,15 +169,134 @@ const SYSTEM_INSTRUCTION = `你是一个专业的 AI Word 文档助手。你的�
 - **推理**：在提供 JSON 更新之前，先用中文简要说明你的设计选择（例如：为什么选择特定的标题、颜色或布局）。
 - **角色**：你是一个“专业文档工程师”。
 
-### 更新模式
+### 更新模式与示例
 A. FULL UPDATE (全量更新): 用于重大更改或初始创建。
+\`\`\`json
+{
+  "type": "full",
+  "state": {
+    "title": "文档标题",
+    "sections": [
+      {
+        "paragraphs": [
+          { "text": "正文内容..." }
+        ]
+      }
+    ]
+  }
+}
+\`\`\`
+
 B. APPEND (追加): 在最后一个章节末尾添加内容。
+\`\`\`json
+{
+  "type": "append",
+  "paragraphs": [
+    { "text": "追加的段落1..." },
+    { "text": "追加的段落2..." }
+  ]
+}
+\`\`\`
+
 C. PATCH (补丁): 修改特定部分（标题、插入或删除段落）。
+\`\`\`json
+{
+  "type": "patch",
+  "actions": [
+    { "op": "replace", "path": "title", "value": "新标题" },
+    { "op": "insert", "sectionIndex": 0, "paragraphIndex": 1, "paragraphs": [{ "text": "插入的段落" }] },
+    { "op": "remove", "sectionIndex": 0, "paragraphIndex": 2 }
+  ]
+}
+\`\`\`
 
 段落结构属性：text (简单文本), runs (数组，用于混合样式), isHeading, headingLevel (1-6), isBold, isItalic, isBullet, isNumbering, alignment (left|center|right|justify), color (段落默认颜色)。
 Run 结构属性：text, isBold, isItalic, color。
 
 注意：如果用户没有要求特定颜色，请在 JSON 中省略 "color" 属性。预览时文档背景始终为白色，文字默认为黑色。`;
+
+function ModelSelector({ selected, onChange, darkMode }: { selected: string, onChange: (val: string) => void, darkMode: boolean }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const models = [
+    { id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro", icon: "✨", desc: "Best for complex reasoning & logic" },
+    { id: "gemini-3-flash-preview", name: "Gemini 3 Flash", icon: "⚡", desc: "Fast and versatile for most tasks" },
+    { id: "gemini-3.1-flash-lite-preview", name: "Gemini 3.1 Flashlite", icon: "🚀", desc: "Ultra-fast for simple tasks" }
+  ];
+  const selectedModel = models.find(m => m.id === selected) || models[0];
+
+  return (
+    <div className="relative">
+      <button 
+        onClick={() => setIsOpen(!isOpen)}
+        className={cn(
+          "flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-all border shadow-sm backdrop-blur-md",
+          darkMode 
+            ? "bg-black/20 border-white/10 text-gray-200 hover:bg-black/40" 
+            : "bg-white/40 border-black/5 text-gray-700 hover:bg-white/60"
+        )}
+      >
+        <span className="text-lg">{selectedModel.icon}</span>
+        <span>{selectedModel.name}</span>
+        <ChevronRight size={16} className={cn("transition-transform duration-200", isOpen ? "rotate-90" : "")} />
+      </button>
+      
+      <AnimatePresence>
+        {isOpen && (
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
+            <motion.div 
+              initial={{ opacity: 0, y: -10, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -10, scale: 0.95 }}
+              transition={{ duration: 0.15, ease: "easeOut" }}
+              className={cn(
+                "absolute top-full mt-2 right-0 w-64 rounded-2xl border shadow-2xl z-50 overflow-hidden p-1 backdrop-blur-2xl",
+                darkMode ? "bg-[#1E1E1E]/80 border-white/10" : "bg-white/80 border-black/5"
+              )}
+            >
+              {models.map(m => (
+                <button
+                  key={m.id}
+                  onClick={() => { onChange(m.id); setIsOpen(false); }}
+                  className={cn(
+                    "w-full flex items-start gap-3 px-3 py-3 rounded-xl text-left transition-colors relative group",
+                    selected === m.id 
+                      ? (darkMode ? "bg-blue-500/10" : "bg-blue-50/50") 
+                      : (darkMode ? "hover:bg-[#2A2A2A]" : "hover:bg-gray-50")
+                  )}
+                >
+                  <span className="text-xl mt-0.5">{m.icon}</span>
+                  <div className="flex-1 flex flex-col">
+                    <span className={cn(
+                      "text-sm font-medium",
+                      selected === m.id 
+                        ? (darkMode ? "text-blue-400" : "text-blue-600")
+                        : (darkMode ? "text-gray-200" : "text-gray-800")
+                    )}>
+                      {m.name}
+                    </span>
+                    <span className={cn(
+                      "text-xs mt-0.5",
+                      darkMode ? "text-gray-500" : "text-gray-500"
+                    )}>
+                      {m.desc}
+                    </span>
+                  </div>
+                  {selected === m.id && (
+                    <Check size={16} className={cn(
+                      "absolute right-3 top-1/2 -translate-y-1/2",
+                      darkMode ? "text-blue-400" : "text-blue-600"
+                    )} />
+                  )}
+                </button>
+              ))}
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
 
 export default function App() {
   const [docState, setDocState] = useState<DocumentState>(INITIAL_DOC_STATE);
@@ -188,6 +316,8 @@ export default function App() {
   const [isMobile, setIsMobile] = useState(false);
   const [activeTab, setActiveTab] = useState<"chat" | "preview">("chat");
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{ message: string, action: () => void } | null>(null);
+  const [focusedBlock, setFocusedBlock] = useState<{s: number, p: number} | null>(null);
   
   const chatEndRef = useRef<HTMLDivElement>(null);
   const aiRef = useRef<GoogleGenAI | null>(null);
@@ -262,13 +392,14 @@ export default function App() {
     }
   };
 
-  const saveCurrentDoc = async (state: DocumentState) => {
+  const saveCurrentDoc = async (state: DocumentState, msgs: ChatMessage[]) => {
     if (!user) return;
     try {
       const docData = {
         uid: user.uid,
         title: state.title,
         content: JSON.stringify(state),
+        messages: JSON.stringify(msgs),
         updatedAt: new Date().toISOString()
       };
 
@@ -286,11 +417,22 @@ export default function App() {
 
   const loadDoc = (docItem: any) => {
     try {
-      const state = JSON.parse(docItem.content);
+      const state = typeof docItem.content === 'string' ? JSON.parse(docItem.content) : docItem.content;
       setDocState(state);
       setCurrentDocId(docItem.id);
       setShowHistory(false);
-      setMessages([]); // Clear chat for new context
+      
+      try {
+        if (docItem.messages) {
+          const parsedMessages = typeof docItem.messages === 'string' ? JSON.parse(docItem.messages) : docItem.messages;
+          setMessages(parsedMessages);
+        } else {
+          setMessages([]);
+        }
+      } catch (msgError) {
+        console.error("Failed to parse messages", msgError);
+        setMessages([]);
+      }
     } catch (e) {
       console.error("Failed to load doc", e);
     }
@@ -330,99 +472,203 @@ export default function App() {
     }
   };
 
-  const applyUpdate = (update: any) => {
-    setDocState(prev => {
-      let next = { ...prev };
+  const applyUpdate = (update: any): DocumentState => {
+    let next = JSON.parse(JSON.stringify(docState)); // Deep copy to avoid mutating current state
+    
+    if (update.type === "full") {
+      next = update.state;
+    } else if (update.type === "append" || Array.isArray(update) || update.paragraphs || update.append || update.sections) {
+      const lastSectionIdx = next.sections.length - 1;
       
-      if (update.type === "full") {
-        next = update.state;
-      } else if (update.type === "append") {
-        const lastSectionIdx = next.sections.length - 1;
-        const paragraphs = Array.isArray(update.paragraphs) ? update.paragraphs : (update.paragraphs ? [update.paragraphs] : []);
+      let paragraphsToAppend: any[] = [];
+      if (Array.isArray(update)) {
+        paragraphsToAppend = update;
+      } else if (update.paragraphs) {
+        paragraphsToAppend = Array.isArray(update.paragraphs) ? update.paragraphs : [update.paragraphs];
+      } else if (update.append && Array.isArray(update.append)) {
+        paragraphsToAppend = update.append;
+      } else if (update.append?.sections?.[0]?.paragraphs) {
+        paragraphsToAppend = update.append.sections[0].paragraphs;
+      } else if (update.sections?.[0]?.paragraphs) {
+        paragraphsToAppend = update.sections[0].paragraphs;
+      } else if (update.data && Array.isArray(update.data)) {
+        paragraphsToAppend = update.data;
+      } else {
+        // Fallback: try to find any array in the object that looks like paragraphs
+        for (const key in update) {
+          if (Array.isArray(update[key]) && update[key].length > 0 && (update[key][0].text || update[key][0].runs)) {
+            paragraphsToAppend = update[key];
+            break;
+          }
+        }
+      }
+
+      if (paragraphsToAppend.length > 0) {
         if (lastSectionIdx >= 0) {
           next.sections[lastSectionIdx].paragraphs = [
             ...next.sections[lastSectionIdx].paragraphs,
-            ...paragraphs
+            ...paragraphsToAppend
           ];
         } else {
-          next.sections = [{ paragraphs: paragraphs }];
+          next.sections = [{ paragraphs: paragraphsToAppend }];
         }
-      } else if (update.type === "patch") {
-        update.actions.forEach((action: any) => {
-          if (action.op === "replace" && action.path === "title") {
-            next.title = action.value;
-          } else if (action.op === "insert") {
-            const section = next.sections[action.sectionIndex || 0];
-            if (section) {
-              const paragraphs = Array.isArray(action.paragraphs) ? action.paragraphs : (action.paragraphs ? [action.paragraphs] : []);
-              section.paragraphs.splice(action.paragraphIndex, 0, ...paragraphs);
-            }
-          } else if (action.op === "remove") {
-            const section = next.sections[action.sectionIndex || 0];
-            if (section) {
-              section.paragraphs.splice(action.paragraphIndex, 1);
-            }
-          }
-        });
       }
-      
-      saveCurrentDoc(next);
-      return next;
-    });
+    } else if (update.type === "patch") {
+      update.actions?.forEach((action: any) => {
+        if (action.op === "replace" && action.path === "title") {
+          next.title = action.value;
+        } else if (action.op === "insert") {
+          const section = next.sections[action.sectionIndex || 0];
+          if (section) {
+            const paragraphs = Array.isArray(action.paragraphs) ? action.paragraphs : (action.paragraphs ? [action.paragraphs] : []);
+            section.paragraphs.splice(action.paragraphIndex, 0, ...paragraphs);
+          }
+        } else if (action.op === "remove") {
+          const section = next.sections[action.sectionIndex || 0];
+          if (section) {
+            section.paragraphs.splice(action.paragraphIndex, 1);
+          }
+        }
+      });
+    }
+    
+    setDocState(next);
+    return next;
   };
 
   const handleSendMessage = async (retryPrompt?: string) => {
     const promptToUse = retryPrompt || input;
     if (!promptToUse.trim() || !aiRef.current || isLoading) return;
 
+    let currentMessages = [...messages];
     if (!retryPrompt) {
       const userMessage: ChatMessage = { role: "user", text: promptToUse };
-      setMessages((prev) => [...prev, userMessage]);
+      currentMessages = [...currentMessages, userMessage];
+      setMessages(currentMessages);
       setInput("");
     }
     
     setIsLoading(true);
 
     try {
+      console.log("Starting AI drafting...");
+      console.log("aiRef.current:", aiRef.current);
+      console.log("selectedModel:", selectedModel);
       // Include current state in context for the AI
       const contextPrompt = `CURRENT DOCUMENT STATE: ${JSON.stringify(docState)}\n\nUSER REQUEST: ${promptToUse}`;
+      console.log("Context prompt prepared.");
 
-      const chat = aiRef.current.chats.create({
-        model: selectedModel,
-        config: {
-          systemInstruction: SYSTEM_INSTRUCTION,
-          thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
-        },
-        history: messages.map(m => ({
+      const contents = [
+        ...messages.map(m => ({
           role: m.role,
           parts: [{ text: m.text }]
-        }))
-      });
+        })),
+        {
+          role: "user",
+          parts: [{ text: contextPrompt }]
+        }
+      ];
 
-      const result = await chat.sendMessage({ message: contextPrompt });
-      const responseText = result.text;
+      console.log("Calling generateContentStream...");
+      const responseStream = await aiRef.current.models.generateContentStream({
+        model: selectedModel,
+        contents,
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION,
+          ...(selectedModel === "gemini-3.1-pro-preview" ? { thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH } } : {}),
+        }
+      });
+      console.log("Stream received.");
+      
+      let fullText = "";
+      let currentSteps: string[] = [];
+      
+      // Add placeholder for streaming message
+      setMessages((prev) => [...prev, { role: "model", text: "", steps: [], isStreaming: true }]);
+
+      console.log("Starting stream loop...");
+      for await (const chunk of responseStream) {
+        console.log("Received chunk:", chunk);
+        const chunkText = chunk.text;
+        if (chunkText) {
+          fullText += chunkText;
+          
+          // Parse steps
+          const stepMatches = Array.from(fullText.matchAll(/<step>(.*?)<\/step>/g));
+          currentSteps = stepMatches.map(m => m[1]);
+          
+          // Remove steps from the displayed text
+          let cleanText = fullText.replace(/<step>.*?<\/step>\n?/g, "");
+          
+          setMessages((prev) => {
+            const newMessages = [...prev];
+            newMessages[newMessages.length - 1] = { 
+              role: "model", 
+              text: cleanText,
+              steps: currentSteps,
+              isStreaming: true
+            };
+            return newMessages;
+          });
+        }
+      }
+      console.log("Stream loop finished.");
 
       // Extract JSON if present
-      const jsonMatch = responseText.match(/```json\n([\s\S]*?)\n```/) || responseText.match(/```\n([\s\S]*?)\n```/);
-      let cleanText = responseText;
+      let jsonMatch = fullText.match(/```json\n([\s\S]*?)\n```/) || fullText.match(/```\n([\s\S]*?)\n```/);
+      
+      if (!jsonMatch) {
+        // Fallback: try to find a raw JSON object or array
+        const rawJsonMatch = fullText.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+        if (rawJsonMatch) {
+          try {
+            JSON.parse(rawJsonMatch[1]); // Validate it's actually JSON
+            jsonMatch = [rawJsonMatch[0], rawJsonMatch[1]] as any;
+          } catch (e) {
+            // Not valid JSON, ignore
+          }
+        }
+      }
+
+      let cleanText = fullText.replace(/<step>.*?<\/step>\n?/g, "");
+      let finalDocState = docState;
 
       if (jsonMatch) {
         try {
           const jsonStr = jsonMatch[1];
           const update = JSON.parse(jsonStr);
-          applyUpdate(update);
+          const nextState = applyUpdate(update);
+          if (nextState) finalDocState = nextState;
           setLastJson(jsonStr);
-          setShowCode(true);
-          cleanText = responseText.replace(jsonMatch[0], "").trim();
+          cleanText = cleanText.replace(jsonMatch[0], "").trim();
         } catch (e) {
           console.error("Failed to parse JSON from AI", e);
         }
       }
 
-      setMessages((prev) => [...prev, { role: "model", text: cleanText || "Document updated." }]);
+      setMessages((prev) => {
+        const newMessages = [...prev];
+        newMessages[newMessages.length - 1] = { 
+          role: "model", 
+          text: cleanText.trim() || "Document updated.",
+          steps: currentSteps,
+          isStreaming: false
+        };
+        saveCurrentDoc(finalDocState, newMessages);
+        return newMessages;
+      });
+
     } catch (error) {
       console.error("AI Error:", error);
-      setMessages((prev) => [...prev, { role: "model", text: "Sorry, I encountered an error. Please try again." }]);
+      setMessages((prev) => {
+        const newMessages = [...prev];
+        newMessages[newMessages.length - 1] = { 
+          role: "model", 
+          text: "Sorry, I encountered an error. Please try again.",
+          isStreaming: false
+        };
+        return newMessages;
+      });
     } finally {
       setIsLoading(false);
     }
@@ -446,20 +692,24 @@ export default function App() {
   };
 
   const handleResetColors = () => {
-    if (window.confirm("Remove all custom colors from the document?")) {
-      setDocState(prev => {
-        const next = { ...prev };
-        next.sections = next.sections.map(section => ({
-          ...section,
-          paragraphs: section.paragraphs.map(p => {
-            const { color, ...rest } = p;
-            return rest;
-          })
-        }));
-        saveCurrentDoc(next);
-        return next;
-      });
-    }
+    setConfirmAction({
+      message: "Remove all custom colors from the document?",
+      action: () => {
+        setDocState(prev => {
+          const next = { ...prev };
+          next.sections = next.sections.map(section => ({
+            ...section,
+            paragraphs: section.paragraphs.map(p => {
+              const { color, ...rest } = p;
+              return rest;
+            })
+          }));
+          saveCurrentDoc(next, messages);
+          return next;
+        });
+        setConfirmAction(null);
+      }
+    });
   };
 
   const handleExport = () => {
@@ -467,12 +717,61 @@ export default function App() {
   };
 
   const handleReset = () => {
-    if (window.confirm("Are you sure you want to start a new document? This will clear your current work.")) {
-      setDocState(INITIAL_DOC_STATE);
-      setMessages([]);
-      setLastJson("");
-      setCurrentDocId(null);
-    }
+    setConfirmAction({
+      message: "Are you sure you want to start a new document? This will clear your current work.",
+      action: () => {
+        setDocState(INITIAL_DOC_STATE);
+        setMessages([]);
+        setLastJson("");
+        setCurrentDocId(null);
+        setConfirmAction(null);
+      }
+    });
+  };
+
+  const updateFocusedBlock = (updates: any) => {
+    if (!focusedBlock) return;
+    setDocState(prev => {
+      const next = { ...prev };
+      const p = next.sections[focusedBlock.s].paragraphs[focusedBlock.p];
+      
+      for (const key in updates) {
+        if (typeof updates[key] === 'boolean') {
+          (p as any)[key] = !(p as any)[key];
+        } else {
+          (p as any)[key] = updates[key];
+        }
+      }
+      
+      saveCurrentDoc(next, messages);
+      return next;
+    });
+  };
+
+  const deleteFocusedBlock = () => {
+    if (!focusedBlock) return;
+    setDocState(prev => {
+      const next = { ...prev };
+      next.sections[focusedBlock.s].paragraphs.splice(focusedBlock.p, 1);
+      saveCurrentDoc(next, messages);
+      return next;
+    });
+    setFocusedBlock(null);
+  };
+
+  const handleTextEdit = (sIdx: number, pIdx: number, rIdx: number, newText: string | null) => {
+    if (newText === null) return;
+    setDocState(prev => {
+      const next = { ...prev };
+      const p = next.sections[sIdx].paragraphs[pIdx];
+      if (rIdx >= 0 && p.runs) {
+        p.runs[rIdx].text = newText;
+      } else {
+        p.text = newText;
+      }
+      saveCurrentDoc(next, messages);
+      return next;
+    });
   };
 
   if (!isAuthReady) {
@@ -485,22 +784,100 @@ export default function App() {
 
   return (
     <div className={cn(
-      "flex flex-col h-screen overflow-hidden transition-colors duration-300",
-      darkMode ? "bg-[#121212] text-[#E0E0E0] dark" : "bg-[#F8F9FA] text-[#202124]"
+      "flex flex-col h-screen overflow-hidden transition-colors duration-500 relative",
+      darkMode ? "bg-[#0B0C10] text-[#E0E0E0] dark" : "bg-[#F0F4F8] text-[#202124]"
     )}>
-      {/* Mobile Tab Switcher */}
-      {isMobile && (
+      {/* Atmospheric Background */}
+      <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
         <div className={cn(
-          "flex border-b shrink-0 z-[60]",
-          darkMode ? "bg-[#1E1E1E] border-[#333]" : "bg-white border-[#E0E0E0]"
-        )}>
+          "absolute -top-[10%] -left-[5%] w-[60%] h-[60%] rounded-full mix-blend-multiply filter blur-[120px] opacity-60 animate-blob",
+          darkMode ? "bg-blue-600/50" : "bg-blue-400"
+        )} style={{ animationDuration: '8s' }} />
+        <div className={cn(
+          "absolute top-[15%] -right-[5%] w-[50%] h-[70%] rounded-full mix-blend-multiply filter blur-[120px] opacity-60 animate-blob",
+          darkMode ? "bg-cyan-600/50" : "bg-cyan-400"
+        )} style={{ animationDuration: '12s', animationDelay: '2s' }} />
+        <div className={cn(
+          "absolute -bottom-[15%] left-[15%] w-[70%] h-[60%] rounded-full mix-blend-multiply filter blur-[120px] opacity-60 animate-blob",
+          darkMode ? "bg-indigo-600/50" : "bg-indigo-400"
+        )} style={{ animationDuration: '10s', animationDelay: '4s' }} />
+      </div>
+
+      {/* Global Header */}
+      <header className={cn(
+        "shrink-0 z-50 border-b transition-colors",
+        darkMode ? "bg-[#1A1A1A] border-white/10" : "bg-white border-black/5 shadow-sm"
+      )}>
+        <div className="flex items-center justify-between px-4 py-2">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
+              <Wand2 size={18} />
+            </div>
+            <h1 className="font-bold text-lg tracking-tight">AI Word Sandbox</h1>
+          </div>
+          
+          <div className="flex items-center gap-2">
+            <ModelSelector 
+              selected={selectedModel} 
+              onChange={setSelectedModel} 
+              darkMode={darkMode} 
+            />
+            <button 
+              onClick={() => setDarkMode(!darkMode)}
+              className={cn(
+                "p-2 rounded-lg transition-colors",
+                darkMode ? "hover:bg-[#333] text-yellow-400" : "hover:bg-gray-100 text-gray-500"
+              )}
+            >
+              {darkMode ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
+            {user ? (
+              <div className="flex items-center gap-2 pl-2 border-l border-inherit ml-1">
+                <button 
+                  onClick={() => setShowHistory(!showHistory)}
+                  className={cn(
+                    "p-1.5 rounded-md transition-colors mr-1",
+                    showHistory ? "bg-blue-100 text-blue-600" : "hover:bg-gray-100 dark:hover:bg-[#333] text-gray-500"
+                  )}
+                  title="My Documents"
+                >
+                  <History size={16} />
+                </button>
+                <img src={user.photoURL || ""} alt="Avatar" className="w-8 h-8 rounded-full border border-gray-300" />
+                {!isMobile && (
+                  <div className="flex flex-col overflow-hidden max-w-[120px]">
+                    <span className="text-[10px] font-medium truncate">{user.displayName}</span>
+                    <span className="text-[8px] opacity-60 truncate">{user.email}</span>
+                  </div>
+                )}
+                <button 
+                  onClick={handleLogout}
+                  className="p-1.5 hover:bg-red-100 hover:text-red-600 rounded-md transition-colors text-gray-400"
+                >
+                  <LogOut size={16} />
+                </button>
+              </div>
+            ) : (
+              <button 
+                onClick={handleLogin}
+                className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-all"
+              >
+                <LogIn size={16} />
+                <span>Login</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Tab Switcher */}
+        <div className="flex px-4 border-t border-inherit">
           <button 
             onClick={() => setActiveTab("chat")}
             className={cn(
-              "flex-1 py-3 text-sm font-medium transition-all border-b-2",
+              "px-6 py-2 text-sm font-medium transition-all border-b-2",
               activeTab === "chat" 
                 ? "border-blue-600 text-blue-600" 
-                : "border-transparent opacity-60"
+                : "border-transparent opacity-60 hover:opacity-100"
             )}
           >
             Chat
@@ -508,18 +885,18 @@ export default function App() {
           <button 
             onClick={() => setActiveTab("preview")}
             className={cn(
-              "flex-1 py-3 text-sm font-medium transition-all border-b-2",
+              "px-6 py-2 text-sm font-medium transition-all border-b-2",
               activeTab === "preview" 
                 ? "border-blue-600 text-blue-600" 
-                : "border-transparent opacity-60"
+                : "border-transparent opacity-60 hover:opacity-100"
             )}
           >
             Preview
           </button>
         </div>
-      )}
+      </header>
 
-      <div className="flex flex-1 overflow-hidden relative">
+      <div className="flex flex-1 overflow-hidden relative z-10">
         {/* Sidebar - Chat Interface */}
         <motion.div 
           initial={false}
@@ -530,108 +907,46 @@ export default function App() {
           }}
           className={cn(
             "flex flex-col border-r relative z-10 transition-colors overflow-hidden shrink-0",
-            darkMode ? "border-[#333] bg-[#1E1E1E]" : "border-[#E0E0E0] bg-white",
+            darkMode ? "border-white/10 bg-[#0B0C10]" : "border-black/5 bg-white shadow-[4px_0_24px_rgba(0,0,0,0.02)]",
             (!sidebarOpen && !isMobile) && "border-none",
-            isMobile && "fixed inset-x-0 bottom-0 top-[48px] z-50"
+            isMobile && "fixed inset-x-0 bottom-0 top-[92px] z-50"
           )}
         >
+          {/* Chat Spotlight Glow - Only in Chat Sidebar */}
+          <div className={cn(
+            "absolute top-0 left-1/2 -translate-x-1/2 w-[160%] h-[100%] pointer-events-none z-0 opacity-60",
+            darkMode 
+              ? "bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.15)_0%,transparent_70%)]" 
+              : "bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.08)_0%,transparent_70%)]"
+          )} />
+
         <div className={cn(
-          "flex flex-col h-full",
+          "flex flex-col h-full relative z-10",
           isMobile ? "w-screen" : "w-[450px]"
         )}>
+          {/* Sidebar Header with History Toggle */}
           <div className={cn(
-            "flex items-center justify-between p-4 border-b shrink-0",
-            darkMode ? "border-[#333]" : "border-[#E0E0E0]"
+            "shrink-0 p-4 border-b flex items-center justify-between backdrop-blur-md",
+            darkMode ? "border-white/10 bg-[#1A1A1A]/70" : "border-black/5 bg-gray-50/70"
           )}>
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white">
-                <Wand2 size={18} />
-              </div>
-              <h1 className="font-semibold text-lg tracking-tight truncate">AI Word Sandbox</h1>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <div className="relative group">
-                <select 
-                  value={selectedModel}
-                  onChange={(e) => setSelectedModel(e.target.value)}
-                  className={cn(
-                    "appearance-none text-[11px] font-semibold pl-2.5 pr-8 py-1.5 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all cursor-pointer",
-                    darkMode 
-                      ? "bg-[#252525] border-[#444] text-gray-300 hover:border-gray-600" 
-                      : "bg-white border-gray-200 text-gray-700 hover:border-gray-300 shadow-sm"
-                  )}
-                >
-                  <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro</option>
-                  <option value="gemini-3-flash-preview">Gemini 3 Flash</option>
-                  <option value="gemini-3.1-flash-lite-preview">Gemini 3.1 Flashlite</option>
-                </select>
-                <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
-                  <ChevronRight size={12} className="rotate-90" />
-                </div>
-              </div>
-              <button 
-                onClick={() => setDarkMode(!darkMode)}
-                className={cn(
-                  "p-2 rounded-lg transition-colors",
-                  darkMode ? "hover:bg-[#333] text-yellow-400" : "hover:bg-gray-100 text-gray-500"
-                )}
-              >
-                {darkMode ? <Sun size={18} /> : <Moon size={18} />}
-              </button>
-              {!isMobile && (
-                <button 
-                  onClick={() => setSidebarOpen(false)}
-                  className={cn(
-                    "p-1.5 rounded-md transition-colors",
-                    darkMode ? "hover:bg-[#333]" : "hover:bg-gray-100"
-                  )}
-                >
-                  <ChevronLeft size={20} />
-                </button>
+            <h2 className="text-xs font-bold uppercase tracking-wider opacity-60">
+              {showHistory ? "Document History" : "AI Assistant"}
+            </h2>
+            <button 
+              onClick={() => setShowHistory(!showHistory)}
+              className={cn(
+                "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium transition-all",
+                showHistory 
+                  ? "bg-blue-100 text-blue-600" 
+                  : "hover:bg-gray-100 dark:hover:bg-[#333] text-gray-500"
               )}
-            </div>
+            >
+              <History size={14} />
+              <span>{showHistory ? "Back to Chat" : "History"}</span>
+            </button>
           </div>
 
-        {/* User Profile / Auth */}
-        <div className={cn(
-          "p-3 border-b flex items-center justify-between",
-          darkMode ? "border-[#333] bg-[#252525]" : "border-[#E0E0E0] bg-gray-50"
-        )}>
-          {user ? (
-            <div className="flex items-center gap-3 overflow-hidden w-full">
-              <img src={user.photoURL || ""} alt="Avatar" className="w-8 h-8 rounded-full border border-gray-300" />
-              <div className="flex flex-col overflow-hidden flex-1">
-                <span className="text-xs font-medium truncate">{user.displayName}</span>
-                <span className="text-[10px] opacity-60 truncate">{user.email}</span>
-              </div>
-              <div className="flex gap-1">
-                <button 
-                  onClick={() => setShowHistory(!showHistory)}
-                  className={cn(
-                    "p-1.5 rounded-md transition-colors",
-                    showHistory ? "bg-blue-100 text-blue-600" : "hover:bg-gray-200"
-                  )}
-                  title="My Documents"
-                >
-                  <History size={16} />
-                </button>
-                <button onClick={handleLogout} className="p-1.5 hover:bg-red-50 hover:text-red-600 rounded-md transition-colors" title="Logout">
-                  <LogOut size={16} />
-                </button>
-              </div>
-            </div>
-          ) : (
-            <button 
-              onClick={handleLogin}
-              className="w-full flex items-center justify-center gap-2 bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-all shadow-sm"
-            >
-              <LogIn size={16} />
-              Login with Google
-            </button>
-          )}
-        </div>
-
-        <div className="flex-1 overflow-y-auto custom-scrollbar relative">
+          <div className="flex-1 overflow-y-auto custom-scrollbar relative">
           <AnimatePresence>
             {showHistory ? (
               <motion.div 
@@ -652,7 +967,7 @@ export default function App() {
                       key={d.id}
                       className={cn(
                         "group p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between",
-                        darkMode ? "bg-[#252525] border-[#444] hover:border-blue-500" : "bg-white border-gray-100 hover:border-blue-400 shadow-sm"
+                        darkMode ? "bg-[#1A1A1A] border-white/10 hover:border-blue-500" : "bg-white border-gray-200 hover:border-blue-400 shadow-sm"
                       )}
                       onClick={() => loadDoc(d)}
                     >
@@ -690,42 +1005,109 @@ export default function App() {
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     className={cn(
-                      "group relative max-w-[90%] p-3 rounded-2xl text-sm leading-relaxed mb-4",
-                      msg.role === "user" 
-                        ? "bg-blue-600 text-white ml-auto rounded-tr-none" 
-                        : cn("mr-auto rounded-tl-none", darkMode ? "bg-[#333] text-gray-200" : "bg-gray-100 text-gray-800")
+                      "flex flex-col mb-4",
+                      msg.role === "user" ? "items-end" : "items-start"
                     )}
                   >
-                    <div className="prose prose-sm max-w-none prose-p:leading-relaxed dark:prose-invert">
-                      <Markdown>{msg.text}</Markdown>
+                    <div
+                      className={cn(
+                        "group relative max-w-[90%] p-3 rounded-2xl text-sm leading-relaxed shadow-sm border",
+                        msg.role === "user" 
+                          ? "bg-blue-600 text-white rounded-tr-none border-blue-500/50" 
+                          : cn("rounded-tl-none", darkMode ? "bg-[#2A2A2A] border-white/10 text-gray-200" : "bg-white border-gray-200 text-gray-800")
+                      )}
+                    >
+                      {msg.steps && msg.steps.length > 0 && (
+                        <div className="mb-3 space-y-1.5 border-b border-gray-500/20 pb-2">
+                          {msg.steps.map((step, idx) => (
+                            <div key={idx} className="flex items-center gap-2 text-xs opacity-80 font-medium">
+                              {msg.isStreaming && idx === msg.steps!.length - 1 ? (
+                                <Loader2 size={12} className="animate-spin text-blue-500" />
+                              ) : (
+                                <Check size={12} className="text-green-500" />
+                              )}
+                              <span>{step}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      
+                      {msg.text && (
+                        <div className="prose prose-sm max-w-none prose-p:leading-relaxed dark:prose-invert overflow-x-hidden">
+                          <Markdown
+                            components={{
+                              code({ node, inline, className, children, ...props }: any) {
+                                const match = /language-(\w+)/.exec(className || "");
+                                const language = match ? match[1] : "text";
+                                return !inline ? (
+                                  <div className="relative rounded-xl overflow-hidden my-4 shadow-lg border border-gray-200 dark:border-[#444] bg-gray-50/80 dark:bg-[#1E1E1E]/80 backdrop-blur-sm">
+                                    <div className="flex items-center justify-between px-4 py-2 bg-gray-200/50 dark:bg-[#2A2A2A] border-b border-gray-200 dark:border-[#444] text-xs font-mono text-gray-600 dark:text-gray-300">
+                                      <span className="font-semibold">{language}</span>
+                                      <button
+                                        onClick={() => {
+                                          navigator.clipboard.writeText(String(children).replace(/\n$/, ""));
+                                        }}
+                                        className="hover:text-gray-900 dark:hover:text-white transition-colors flex items-center gap-1"
+                                        title="Copy code"
+                                      >
+                                        <Copy size={14} />
+                                        <span className="text-[10px] uppercase tracking-wider">Copy</span>
+                                      </button>
+                                    </div>
+                                    <div className="overflow-x-auto custom-scrollbar">
+                                      <SyntaxHighlighter
+                                        style={darkMode ? vscDarkPlus : vs}
+                                        language={language}
+                                        PreTag="div"
+                                        customStyle={{ margin: 0, padding: '1rem', fontSize: '13px', backgroundColor: 'transparent' }}
+                                        {...props}
+                                      >
+                                        {String(children).replace(/\n$/, "")}
+                                      </SyntaxHighlighter>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <code className={cn("bg-gray-200 dark:bg-[#444] px-1.5 py-0.5 rounded text-sm font-mono text-pink-600 dark:text-pink-400", className)} {...props}>
+                                    {children}
+                                  </code>
+                                );
+                              },
+                            }}
+                          >
+                            {msg.text}
+                          </Markdown>
+                        </div>
+                      )}
                     </div>
 
                     {/* Message Actions */}
                     <div className={cn(
-                      "absolute -bottom-6 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity",
-                      msg.role === "user" ? "right-0" : "left-0"
+                      "flex items-center gap-1 mt-1 transition-opacity",
+                      msg.role === "user" ? "opacity-60 hover:opacity-100" : "opacity-0 group-hover:opacity-100"
                     )}>
                       <button
                         onClick={() => handleCopy(msg.text, i)}
                         className={cn(
-                          "p-1 rounded hover:bg-gray-100 transition-colors",
-                          darkMode ? "hover:bg-[#444] text-gray-400" : "text-gray-500"
+                          "p-1.5 rounded flex items-center gap-1 text-xs transition-colors",
+                          darkMode ? "hover:bg-[#444] text-gray-400" : "hover:bg-gray-200 text-gray-500"
                         )}
                         title="Copy message"
                       >
                         {copiedIndex === i ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
+                        {msg.role === "user" && <span>Copy</span>}
                       </button>
                       {msg.role === "model" && i === messages.length - 1 && (
                         <button
                           onClick={handleRetry}
                           disabled={isLoading}
                           className={cn(
-                            "p-1 rounded hover:bg-gray-100 transition-colors",
-                            darkMode ? "hover:bg-[#444] text-gray-400" : "text-gray-500"
+                            "p-1.5 rounded flex items-center gap-1 text-xs transition-colors",
+                            darkMode ? "hover:bg-[#444] text-gray-400" : "hover:bg-gray-200 text-gray-500"
                           )}
                           title="Retry generation"
                         >
                           <RotateCcw size={12} className={isLoading ? "animate-spin" : ""} />
+                          <span>Retry</span>
                         </button>
                       )}
                     </div>
@@ -745,8 +1127,8 @@ export default function App() {
 
         {/* Larger Input Area */}
         <div className={cn(
-          "p-4 border-t transition-colors",
-          darkMode ? "border-[#333] bg-[#1E1E1E]" : "border-[#E0E0E0] bg-white"
+          "p-4 border-t transition-colors backdrop-blur-md",
+          darkMode ? "border-white/10 bg-[#1E1E1E]/70" : "border-black/5 bg-white/70"
         )}>
           <div className="relative flex flex-col gap-2">
             <textarea
@@ -760,8 +1142,8 @@ export default function App() {
               }}
               placeholder="Type your instructions (e.g., 'Create a resume for...')"
               className={cn(
-                "w-full p-4 pr-12 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all resize-none min-h-[100px] max-h-[300px]",
-                darkMode ? "bg-[#252525] border-[#444] text-white" : "bg-gray-50 border-gray-200 text-gray-900"
+                "w-full p-4 pr-12 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all resize-y min-h-[100px] shadow-inner",
+                darkMode ? "bg-[#1A1A1A] border-white/10 text-white" : "bg-white border-black/10 text-gray-900"
               )}
             />
             <div className="flex items-center justify-between">
@@ -776,18 +1158,6 @@ export default function App() {
                 >
                   <Code size={16} />
                   {showCode ? "Hide Code" : "Show Code"}
-                </button>
-                <button 
-                  onClick={() => handleCopy(input, -1)}
-                  disabled={!input.trim()}
-                  className={cn(
-                    "p-2 rounded-lg transition-colors flex items-center gap-1.5 text-xs font-medium",
-                    darkMode ? "hover:bg-[#333] text-gray-400" : "hover:bg-gray-100 text-gray-500"
-                  )}
-                  title="Copy current prompt"
-                >
-                  {copiedIndex === -1 ? <Check size={16} className="text-green-500" /> : <Copy size={16} />}
-                  Copy
                 </button>
               </div>
               <button
@@ -804,13 +1174,13 @@ export default function App() {
     </motion.div>
 
       {/* Toggle Sidebar Button (when closed) */}
-      {!sidebarOpen && (
+      {!sidebarOpen && !isMobile && (
         <button 
           onClick={() => setSidebarOpen(true)}
           className={cn(
             "fixed left-2 z-20 p-1.5 border rounded-md shadow-sm transition-all",
-            isMobile ? "top-[58px]" : "top-[10px]",
-            darkMode ? "bg-[#1E1E1E] border-[#333] hover:bg-[#252525]" : "bg-white border-gray-200 hover:bg-gray-50"
+            "top-[100px]",
+            darkMode ? "bg-[#1E1E1E] border-white/10 hover:bg-[#252525]" : "bg-white border-gray-200 hover:bg-gray-50"
           )}
         >
           <ChevronRight size={18} />
@@ -818,11 +1188,16 @@ export default function App() {
       )}
 
       {/* Main Content - Document Preview */}
-      <main className="flex-1 flex flex-col overflow-hidden relative">
+      <main className={cn(
+        "flex-1 flex flex-col overflow-hidden relative z-10 transition-colors",
+        darkMode 
+          ? "bg-gradient-to-br from-[#050608] to-[#161633]" 
+          : "bg-gradient-to-br from-[#E8EEF5] to-[#DCDCF8]"
+      )}>
         {/* Toolbar */}
         <header className={cn(
-          "h-14 border-b flex items-center justify-between px-4 md:px-6 shrink-0 transition-colors",
-          darkMode ? "bg-[#1E1E1E] border-[#333]" : "bg-white border-[#E0E0E0]"
+          "h-14 border-b flex items-center justify-between px-4 md:px-6 shrink-0 transition-colors z-20 backdrop-blur-md",
+          darkMode ? "bg-[#1E1E1E]/70 border-white/10" : "bg-white/70 border-black/5"
         )}>
           <div className="flex items-center gap-2 md:gap-4 overflow-hidden">
             <div className="flex items-center gap-2 overflow-hidden">
@@ -830,7 +1205,7 @@ export default function App() {
               <input 
                 value={docState.title}
                 onChange={(e) => setDocState(prev => ({ ...prev, title: e.target.value }))}
-                onBlur={() => saveCurrentDoc(docState)}
+                onBlur={() => saveCurrentDoc(docState, messages)}
                 className={cn(
                   "font-medium text-sm focus:outline-none px-2 py-1 rounded border border-transparent transition-all truncate",
                   darkMode ? "bg-transparent text-white hover:border-[#444]" : "bg-transparent text-gray-900 hover:border-gray-200",
@@ -846,11 +1221,6 @@ export default function App() {
               <button onClick={handleResetColors} className="p-2 hover:bg-gray-100 rounded-md text-gray-500 transition-colors" title="Reset All Colors">
                 <Palette size={18} />
               </button>
-              {!isMobile && (
-                <button className="p-2 hover:bg-gray-100 rounded-md text-gray-500 transition-colors" title="Settings">
-                  <Settings size={18} />
-                </button>
-              )}
             </div>
           </div>
 
@@ -870,13 +1240,42 @@ export default function App() {
 
         {/* Document Sandbox */}
         <div className={cn(
-          "flex-1 overflow-y-auto p-4 md:p-12 custom-scrollbar transition-colors",
-          darkMode ? "bg-[#121212]" : "bg-[#F0F2F5]"
+          "flex-1 overflow-y-auto p-4 md:p-12 custom-scrollbar transition-colors relative z-10"
         )}>
+          {/* Document Toolbar - Subheader */}
+          <div className={cn(
+            "sticky top-0 z-30 h-14 border-b flex items-center justify-between px-4 md:px-6 shrink-0 transition-all backdrop-blur-md mb-6 rounded-xl border shadow-lg",
+            darkMode ? "bg-[#1E1E1E]/70 border-white/10" : "bg-white/70 border-black/5"
+          )}>
+            <button onClick={() => updateFocusedBlock({ isBold: true })} className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#333] rounded transition-colors" title="Bold"><Bold size={16} /></button>
+            <button onClick={() => updateFocusedBlock({ isItalic: true })} className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#333] rounded transition-colors" title="Italic"><Italic size={16} /></button>
+            <div className="w-px h-4 bg-gray-300 dark:bg-gray-600 mx-1" />
+            <button onClick={() => updateFocusedBlock({ alignment: 'left' })} className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#333] rounded transition-colors" title="Align Left"><AlignLeft size={16} /></button>
+            <button onClick={() => updateFocusedBlock({ alignment: 'center' })} className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#333] rounded transition-colors" title="Align Center"><AlignCenter size={16} /></button>
+            <button onClick={() => updateFocusedBlock({ alignment: 'right' })} className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#333] rounded transition-colors" title="Align Right"><AlignRight size={16} /></button>
+            <button onClick={() => updateFocusedBlock({ alignment: 'justify' })} className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#333] rounded transition-colors" title="Justify"><AlignJustify size={16} /></button>
+            <div className="w-px h-4 bg-gray-300 dark:bg-gray-600 mx-1" />
+            <button onClick={() => updateFocusedBlock({ isBullet: true, isNumbering: false })} className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#333] rounded transition-colors" title="Bullet List"><List size={16} /></button>
+            <button onClick={() => updateFocusedBlock({ isNumbering: true, isBullet: false })} className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#333] rounded transition-colors" title="Numbered List"><ListOrdered size={16} /></button>
+            <div className="w-px h-4 bg-gray-300 dark:bg-gray-600 mx-1" />
+            <button onClick={() => {
+              if (!focusedBlock) return;
+              setDocState(prev => {
+                const next = { ...prev };
+                next.sections[focusedBlock.s].paragraphs.splice(focusedBlock.p + 1, 0, { text: "" });
+                saveCurrentDoc(next, messages);
+                return next;
+              });
+              setFocusedBlock({ s: focusedBlock.s, p: focusedBlock.p + 1 });
+            }} className="p-1.5 hover:bg-blue-100 text-blue-500 rounded transition-colors" title="Add Paragraph Below"><Plus size={16} /></button>
+            <button onClick={deleteFocusedBlock} className="p-1.5 hover:bg-red-100 text-red-500 rounded transition-colors" title="Delete Paragraph"><Trash size={16} /></button>
+          </div>
+
           <motion.div 
             layout
             className={cn(
-              "max-w-[816px] mx-auto shadow-xl min-h-[1056px] p-8 md:p-[96px] relative transition-colors origin-top bg-white text-gray-900",
+              "max-w-[816px] mx-auto shadow-2xl min-h-[1056px] p-8 md:p-[96px] relative transition-colors origin-top backdrop-blur-xl border",
+              "bg-white border-black/5 text-gray-900",
               isMobile && "scale-[0.9] md:scale-100"
             )}
           >
@@ -891,6 +1290,9 @@ export default function App() {
                       justify: "text-justify"
                     }[p.alignment || "left"];
 
+                    const isFocused = focusedBlock?.s === sIdx && focusedBlock?.p === pIdx;
+                    const focusClass = isFocused ? "ring-2 ring-blue-400/50 rounded bg-blue-50/30" : "border border-transparent hover:border-gray-200 rounded";
+
                     if (p.isHeading) {
                       const level = p.headingLevel || 1;
                       const headingSize = {
@@ -902,25 +1304,54 @@ export default function App() {
                         6: "text-sm font-bold mb-1",
                       }[level as 1|2|3|4|5|6];
 
-                      const className = cn(headingSize, alignmentClass);
+                      const className = cn(headingSize, alignmentClass, focusClass, "outline-none p-1 transition-all");
+
+                      const renderHeadingContent = () => {
+                        if (p.runs) {
+                          return p.runs.map((r, i) => (
+                            <span 
+                              key={i} 
+                              style={{ color: r.color }} 
+                              className={cn(r.isBold && "font-bold", r.isItalic && "italic", "outline-none")}
+                              contentEditable
+                              suppressContentEditableWarning
+                              onBlur={(e) => handleTextEdit(sIdx, pIdx, i, e.currentTarget.textContent)}
+                            >
+                              {r.text}
+                            </span>
+                          ));
+                        }
+                        return (
+                          <span
+                            contentEditable
+                            suppressContentEditableWarning
+                            onBlur={(e) => handleTextEdit(sIdx, pIdx, -1, e.currentTarget.textContent)}
+                            className="outline-none block min-h-[1.2em]"
+                          >
+                            {p.text}
+                          </span>
+                        );
+                      };
 
                       switch (level) {
-                        case 1: return <h1 key={pIdx} className={className} style={{ color: p.color }}>{p.runs ? p.runs.map((r, i) => <span key={i} style={{ color: r.color }} className={cn(r.isBold && "font-bold", r.isItalic && "italic")}>{r.text}</span>) : p.text}</h1>;
-                        case 2: return <h2 key={pIdx} className={className} style={{ color: p.color }}>{p.runs ? p.runs.map((r, i) => <span key={i} style={{ color: r.color }} className={cn(r.isBold && "font-bold", r.isItalic && "italic")}>{r.text}</span>) : p.text}</h2>;
-                        case 3: return <h3 key={pIdx} className={className} style={{ color: p.color }}>{p.runs ? p.runs.map((r, i) => <span key={i} style={{ color: r.color }} className={cn(r.isBold && "font-bold", r.isItalic && "italic")}>{r.text}</span>) : p.text}</h3>;
-                        case 4: return <h4 key={pIdx} className={className} style={{ color: p.color }}>{p.runs ? p.runs.map((r, i) => <span key={i} style={{ color: r.color }} className={cn(r.isBold && "font-bold", r.isItalic && "italic")}>{r.text}</span>) : p.text}</h4>;
-                        case 5: return <h5 key={pIdx} className={className} style={{ color: p.color }}>{p.runs ? p.runs.map((r, i) => <span key={i} style={{ color: r.color }} className={cn(r.isBold && "font-bold", r.isItalic && "italic")}>{r.text}</span>) : p.text}</h5>;
-                        case 6: return <h6 key={pIdx} className={className} style={{ color: p.color }}>{p.runs ? p.runs.map((r, i) => <span key={i} style={{ color: r.color }} className={cn(r.isBold && "font-bold", r.isItalic && "italic")}>{r.text}</span>) : p.text}</h6>;
-                        default: return <h1 key={pIdx} className={className} style={{ color: p.color }}>{p.runs ? p.runs.map((r, i) => <span key={i} style={{ color: r.color }} className={cn(r.isBold && "font-bold", r.isItalic && "italic")}>{r.text}</span>) : p.text}</h1>;
+                        case 1: return <h1 key={pIdx} onClick={() => setFocusedBlock({s: sIdx, p: pIdx})} className={className} style={{ color: p.color }}>{renderHeadingContent()}</h1>;
+                        case 2: return <h2 key={pIdx} onClick={() => setFocusedBlock({s: sIdx, p: pIdx})} className={className} style={{ color: p.color }}>{renderHeadingContent()}</h2>;
+                        case 3: return <h3 key={pIdx} onClick={() => setFocusedBlock({s: sIdx, p: pIdx})} className={className} style={{ color: p.color }}>{renderHeadingContent()}</h3>;
+                        case 4: return <h4 key={pIdx} onClick={() => setFocusedBlock({s: sIdx, p: pIdx})} className={className} style={{ color: p.color }}>{renderHeadingContent()}</h4>;
+                        case 5: return <h5 key={pIdx} onClick={() => setFocusedBlock({s: sIdx, p: pIdx})} className={className} style={{ color: p.color }}>{renderHeadingContent()}</h5>;
+                        case 6: return <h6 key={pIdx} onClick={() => setFocusedBlock({s: sIdx, p: pIdx})} className={className} style={{ color: p.color }}>{renderHeadingContent()}</h6>;
+                        default: return <h1 key={pIdx} onClick={() => setFocusedBlock({s: sIdx, p: pIdx})} className={className} style={{ color: p.color }}>{renderHeadingContent()}</h1>;
                       }
                     }
 
                     return (
                       <div 
                         key={pIdx} 
+                        onClick={() => setFocusedBlock({s: sIdx, p: pIdx})}
                         className={cn(
-                          "flex items-start gap-3",
+                          "flex items-start gap-3 p-1 transition-all",
                           alignmentClass,
+                          focusClass,
                           p.isBullet && "pl-6",
                           p.isNumbering && "pl-6"
                         )}
@@ -935,7 +1366,7 @@ export default function App() {
                         )}
                         <p 
                           className={cn(
-                            "text-[11pt] leading-[1.5] flex-1",
+                            "text-[11pt] leading-[1.5] flex-1 outline-none",
                             p.isBold && "font-bold",
                             p.isItalic && "italic",
                             !p.color && "text-gray-900"
@@ -946,7 +1377,11 @@ export default function App() {
                             p.runs.map((run, rIdx) => (
                               <span 
                                 key={rIdx}
+                                contentEditable
+                                suppressContentEditableWarning
+                                onBlur={(e) => handleTextEdit(sIdx, pIdx, rIdx, e.currentTarget.textContent)}
                                 className={cn(
+                                  "outline-none",
                                   run.isBold && "font-bold",
                                   run.isItalic && "italic"
                                 )}
@@ -956,7 +1391,14 @@ export default function App() {
                               </span>
                             ))
                           ) : (
-                            p.text
+                            <span
+                              contentEditable
+                              suppressContentEditableWarning
+                              onBlur={(e) => handleTextEdit(sIdx, pIdx, -1, e.currentTarget.textContent)}
+                              className="outline-none block min-h-[1.5em]"
+                            >
+                              {p.text}
+                            </span>
                           )}
                         </p>
                       </div>
@@ -983,12 +1425,15 @@ export default function App() {
               animate={{ x: 0 }}
               exit={{ x: "100%" }}
               className={cn(
-                "fixed right-0 bottom-0 border-l shadow-2xl z-30 flex flex-col transition-all",
-                isMobile ? "top-[104px] w-full" : "top-14 w-[400px]",
-                darkMode ? "bg-[#1E1E1E] border-[#333]" : "bg-white border-[#E0E0E0]"
+                "fixed right-0 bottom-0 border-l shadow-2xl z-30 flex flex-col transition-all backdrop-blur-2xl",
+                isMobile ? "top-[104px] w-full" : "top-14 w-[320px]",
+                darkMode ? "bg-[#1E1E1E]/80 border-white/10" : "bg-white/80 border-black/5"
               )}
             >
-              <div className="flex items-center justify-between p-4 border-b">
+              <div className={cn(
+                "flex items-center justify-between p-4 border-b backdrop-blur-md",
+                darkMode ? "border-white/10" : "border-black/5"
+              )}>
                 <div className="flex items-center gap-2 text-blue-600">
                   <Code size={18} />
                   <span className="font-semibold text-sm">AI Generated Structure</span>
@@ -997,11 +1442,11 @@ export default function App() {
                   <X size={18} />
                 </button>
               </div>
-              <div className="flex-1 overflow-auto p-2 text-xs custom-scrollbar">
+              <div className="flex-1 overflow-auto p-2 text-sm custom-scrollbar">
                 <SyntaxHighlighter 
                   language="json" 
                   style={darkMode ? vscDarkPlus : vs}
-                  customStyle={{ margin: 0, borderRadius: '8px', fontSize: '11px' }}
+                  customStyle={{ margin: 0, borderRadius: '8px', fontSize: '13px' }}
                 >
                   {lastJson}
                 </SyntaxHighlighter>
@@ -1011,6 +1456,36 @@ export default function App() {
         </AnimatePresence>
       </main>
       </div>
+
+      {/* Confirm Modal */}
+      {confirmAction && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className={cn(
+            "w-full max-w-sm p-6 rounded-2xl shadow-2xl backdrop-blur-xl border",
+            darkMode ? "bg-[#1E1E1E]/90 text-white border-white/10" : "bg-white/90 text-gray-900 border-black/5"
+          )}>
+            <h3 className="text-lg font-semibold mb-4">Confirm Action</h3>
+            <p className="mb-6 opacity-80">{confirmAction.message}</p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setConfirmAction(null)}
+                className={cn(
+                  "px-4 py-2 rounded-lg font-medium transition-colors",
+                  darkMode ? "hover:bg-[#333]" : "hover:bg-gray-100"
+                )}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmAction.action}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style>{`
         .custom-scrollbar::-webkit-scrollbar {

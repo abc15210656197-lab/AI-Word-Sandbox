@@ -35,4 +35,6 @@ export interface DocumentState {
 export interface ChatMessage {
   role: 'user' | 'model';
   text: string;
+  steps?: string[];
+  isStreaming?: boolean;
 }
