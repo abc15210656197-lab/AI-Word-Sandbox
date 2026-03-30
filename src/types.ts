@@ -8,6 +8,7 @@ export interface DocRun {
   isBold?: boolean;
   isItalic?: boolean;
   color?: string;
+  fontFamily?: string;
 }
 
 export interface DocParagraph {
@@ -21,6 +22,7 @@ export interface DocParagraph {
   isNumbering?: boolean;
   alignment?: 'left' | 'center' | 'right' | 'justify';
   color?: string; // Default color for the whole paragraph
+  fontFamily?: string; // Default font for the whole paragraph
 }
 
 export interface DocSection {

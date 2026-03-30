@@ -124,17 +124,25 @@ export async function generateWordDoc(state: DocumentState) {
               numbering = { reference: "numbers", level: 0 };
             }
 
+            const extractFont = (fontFamily?: string) => {
+              if (!fontFamily) return undefined;
+              const firstFont = fontFamily.split(',')[0].replace(/['"]/g, '').trim();
+              return firstFont;
+            };
+
             const children = p.runs ? p.runs.map(run => new TextRun({
               text: run.text,
               bold: run.isBold,
               italics: run.isItalic,
               color: run.color?.replace("#", ""),
+              font: extractFont(run.fontFamily) || extractFont(p.fontFamily),
             })) : [
               new TextRun({
                 text: p.text || "",
                 bold: p.isBold,
                 italics: p.isItalic,
                 color: p.color?.replace("#", ""),
+                font: extractFont(p.fontFamily),
               }),
             ];
 
