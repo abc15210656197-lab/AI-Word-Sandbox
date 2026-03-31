@@ -18,6 +18,20 @@
   }
 }
 
+@layer base {
+  html, body {
+    @apply h-full overflow-hidden transition-colors duration-500;
+  }
+  
+  body {
+    @apply bg-white text-gray-900;
+  }
+  
+  .dark body {
+    @apply bg-[#0f172a] text-[#E0E0E0];
+  }
+}
+
 @layer utilities {
   .custom-scrollbar::-webkit-scrollbar {
     width: 6px;

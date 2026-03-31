@@ -186,7 +186,9 @@ const SYSTEM_INSTRUCTION = `你是一个专业的 AI Word 文档助手。你的�
 
 ### 更新模式与示例
 A. FULL UPDATE (全量更新): 用于重大更改或初始创建。
-注意：必须包含文档的【完整内容】，严禁只输出修改的部分而遗漏未修改的部分！
+注意：
+- 必须包含文档的【完整内容】，严禁只输出修改的部分而遗漏未修改的部分！
+- **严禁在全量更新时总结、简化或遗漏任何原有内容。必须保持所有段落的完整性。**
 \`\`\`json
 {
   "type": "full",
@@ -215,11 +217,23 @@ B. APPEND (追加): 在最后一个章节末尾添加内容。
 \`\`\`
 
 C. PATCH (补丁): 修改特定部分（标题、插入、删除或替换段落）。
+注意：
+- "path": "title" 用于修改文档的元数据标题（显示在标签页上）。
+- 如果要修改文档正文中的大标题，通常需要同时修改元数据标题和第一个 H1 段落。
 \`\`\`json
 {
   "type": "patch",
   "actions": [
     { "op": "replace", "path": "title", "value": "新标题" },
+    { "op": "replace_paragraphs", "sectionIndex": 0, "paragraphIndex": 0, "count": 1, "paragraphs": [{ "text": "新标题", "isHeading": true, "headingLevel": 1, "alignment": "center" }] }
+  ]
+}
+\`\`\`
+D. 插入、删除或替换段落示例：
+\`\`\`json
+{
+  "type": "patch",
+  "actions": [
     { "op": "insert", "sectionIndex": 0, "paragraphIndex": 1, "paragraphs": [{ "text": "插入的段落" }] },
     { "op": "remove", "sectionIndex": 0, "paragraphIndex": 2 },
     { "op": "replace_paragraphs", "sectionIndex": 0, "paragraphIndex": 3, "count": 1, "paragraphs": [{ "text": "替换后的新段落" }] }
@@ -324,7 +338,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [showCode, setShowCode] = useState(false);
-  const [darkMode, setDarkMode] = useState(true);
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem('darkMode') !== 'false');
   const [user, setUser] = useState<User | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [lastJson, setLastJson] = useState<string>("");
@@ -351,13 +365,18 @@ export default function App() {
   }, [lastJson, showCode]);
 
   // Sync current active session data back to sessions array
-  useEffect(() => {
+  const syncSession = useCallback((
+    currentDocState: DocumentState, 
+    currentMessages: ChatMessage[], 
+    currentLastJson: string, 
+    currentDocId: string | null
+  ) => {
     setSessions(prev => prev.map(s => 
       s.id === activeSessionId 
-        ? { ...s, docState, messages, lastJson, currentDocId } 
+        ? { ...s, docState: currentDocState, messages: currentMessages, lastJson: currentLastJson, currentDocId: currentDocId } 
         : s
     ));
-  }, [docState, messages, lastJson, currentDocId, activeSessionId]);
+  }, [activeSessionId]);
   const [selectedModel, setSelectedModel] = useState("gemini-3-flash-preview");
   const [isMobile, setIsMobile] = useState(false);
   const [activeTab, setActiveTab] = useState<"chat" | "preview">("chat");
@@ -367,7 +386,7 @@ export default function App() {
   const [copiedFormat, setCopiedFormat] = useState<any>(null);
   const [isFormatPainterActive, setIsFormatPainterActive] = useState(false);
   const [isInputExpanded, setIsInputExpanded] = useState(false);
-  const [activeDropdown, setActiveDropdown] = useState<'font' | 'align' | 'list' | null>(null);
+  const [activeDropdown, setActiveDropdown] = useState<'font' | 'align' | 'list' | 'color' | null>(null);
   
   const [history, setHistory] = useState({
     index: 0,
@@ -386,6 +405,67 @@ export default function App() {
       };
     });
   }, []);
+
+  const createNewSession = useCallback(() => {
+    const newId = Math.random().toString(36).substring(2, 11);
+    const newSession: Session = {
+      id: newId,
+      docState: INITIAL_DOC_STATE,
+      messages: [],
+      lastJson: "",
+      currentDocId: null
+    };
+    setSessions(prev => [...prev, newSession]);
+    setActiveSessionId(newId);
+    setDocState(INITIAL_DOC_STATE);
+    setMessages([]);
+    setLastJson("");
+    setCurrentDocId(null);
+    setHistory({ index: 0, stack: [INITIAL_DOC_STATE] });
+  }, []);
+
+  const deleteSession = useCallback((id: string) => {
+    const s = sessions.find(sess => sess.id === id);
+    if (!s) return;
+
+    setConfirmAction({
+      message: `Are you sure you want to delete "${s.docState.title}"?`,
+      action: () => {
+        const newSessions = sessions.filter(sess => sess.id !== id);
+        
+        if (newSessions.length === 0) {
+          // If it was the last session, just reset it
+          const resetId = Math.random().toString(36).substring(2, 11);
+          const resetSession: Session = {
+            id: resetId,
+            docState: INITIAL_DOC_STATE,
+            messages: [],
+            lastJson: "",
+            currentDocId: null
+          };
+          setSessions([resetSession]);
+          setActiveSessionId(resetId);
+          setDocState(INITIAL_DOC_STATE);
+          setMessages([]);
+          setLastJson("");
+          setCurrentDocId(null);
+          setHistory({ index: 0, stack: [INITIAL_DOC_STATE] });
+        } else {
+          setSessions(newSessions);
+          if (activeSessionId === id) {
+            const next = newSessions[0];
+            setActiveSessionId(next.id);
+            setDocState(next.docState);
+            setMessages(next.messages);
+            setLastJson(next.lastJson);
+            setCurrentDocId(next.currentDocId);
+            setHistory({ index: 0, stack: [next.docState] });
+          }
+        }
+        setConfirmAction(null);
+      }
+    });
+  }, [sessions, activeSessionId]);
 
   const undo = useCallback(() => {
     setHistory(prev => {
@@ -436,6 +516,16 @@ export default function App() {
     window.addEventListener("resize", checkMobile);
     return () => window.removeEventListener("resize", checkMobile);
   }, []);
+
+  // Sync dark mode with localStorage and document class
+  useEffect(() => {
+    localStorage.setItem('darkMode', darkMode.toString());
+    if (darkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [darkMode]);
 
   // Initialize AI
   useEffect(() => {
@@ -593,11 +683,15 @@ export default function App() {
     }
   };
 
-  const applyUpdate = (update: any): DocumentState => {
-    let next = JSON.parse(JSON.stringify(docState)); // Deep copy to avoid mutating current state
+  const applyUpdate = (update: any, currentState: DocumentState): DocumentState => {
+    let next = JSON.parse(JSON.stringify(currentState)); // Deep copy to avoid mutating current state
     
     if (update.type === "full") {
       next = update.state;
+      // Ensure title is preserved if missing in full update
+      if (!next.title && currentState.title) {
+        next.title = currentState.title;
+      }
     } else if (update.type === "append" || Array.isArray(update) || update.paragraphs || update.append || update.sections) {
       const lastSectionIdx = next.sections.length - 1;
       
@@ -638,24 +732,30 @@ export default function App() {
       update.actions?.forEach((action: any) => {
         if (action.op === "replace" && action.path === "title") {
           next.title = action.value;
+          // If there's an H1 at the very beginning, update it too if it matches the old title or if it's the first block
+          if (next.sections[0]?.paragraphs[0]?.isHeading && next.sections[0]?.paragraphs[0]?.headingLevel === 1) {
+            // Only update if it seems to be the main title
+            next.sections[0].paragraphs[0].text = action.value;
+            delete next.sections[0].paragraphs[0].runs; // Clear runs if we're setting simple text
+          }
         } else if (action.op === "insert") {
-          const section = next.sections[action.sectionIndex || 0];
+          const section = next.sections[action.sectionIndex ?? 0];
           if (section) {
             const paragraphs = Array.isArray(action.paragraphs) ? action.paragraphs : (action.paragraphs ? [action.paragraphs] : []);
             section.paragraphs = [...section.paragraphs];
-            section.paragraphs.splice(action.paragraphIndex, 0, ...paragraphs);
+            section.paragraphs.splice(action.paragraphIndex ?? section.paragraphs.length, 0, ...paragraphs);
           }
         } else if (action.op === "remove") {
-          const section = next.sections[action.sectionIndex || 0];
-          if (section) {
+          const section = next.sections[action.sectionIndex ?? 0];
+          if (section && typeof action.paragraphIndex === 'number') {
             section.paragraphs = [...section.paragraphs];
             section.paragraphs.splice(action.paragraphIndex, 1);
           }
         } else if (action.op === "replace_paragraphs") {
-          const section = next.sections[action.sectionIndex || 0];
-          if (section) {
+          const section = next.sections[action.sectionIndex ?? 0];
+          if (section && typeof action.paragraphIndex === 'number') {
             const paragraphs = Array.isArray(action.paragraphs) ? action.paragraphs : (action.paragraphs ? [action.paragraphs] : []);
-            const count = action.count || paragraphs.length;
+            const count = action.count ?? paragraphs.length;
             section.paragraphs = [...section.paragraphs];
             section.paragraphs.splice(action.paragraphIndex, count, ...paragraphs);
           }
@@ -663,7 +763,6 @@ export default function App() {
       });
     }
     
-    setDocState(next);
     return next;
   };
 
@@ -703,14 +802,32 @@ export default function App() {
       ];
 
       console.log("Calling generateContentStream...");
-      const responseStream = await aiRef.current.models.generateContentStream({
-        model: selectedModel,
-        contents,
-        config: {
-          systemInstruction: SYSTEM_INSTRUCTION,
-          ...(selectedModel === "gemini-3.1-pro-preview" ? { thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH } } : {}),
+      let responseStream;
+      let retries = 0;
+      const maxRetries = 3;
+      
+      while (retries < maxRetries) {
+        try {
+          responseStream = await aiRef.current.models.generateContentStream({
+            model: selectedModel,
+            contents,
+            config: {
+              systemInstruction: SYSTEM_INSTRUCTION,
+              ...(selectedModel === "gemini-3.1-pro-preview" ? { thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH } } : {}),
+            }
+          });
+          break;
+        } catch (error: any) {
+          if (error.status === 429 && retries < maxRetries) {
+            retries++;
+            const delay = Math.pow(2, retries) * 1000;
+            console.warn(`Rate limit hit, retrying in ${delay}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+          } else {
+            throw error;
+          }
         }
-      });
+      }
       console.log("Stream received.");
       
       let fullText = "";
@@ -800,16 +917,32 @@ export default function App() {
       let finalDocState = docState;
 
       if (jsonMatch) {
+        const jsonStr = jsonMatch[1].trim();
         try {
-          const jsonStr = jsonMatch[1];
+          // Robust JSON parsing: try to fix common issues
           const update = JSON.parse(jsonStr);
-          const nextState = applyUpdate(update);
+          const nextState = applyUpdate(update, docState);
           if (nextState) finalDocState = nextState;
           setLastJson(jsonStr);
           // Close code window when finished as requested
           setTimeout(() => setShowCode(false), 1000);
+          syncSession(finalDocState, messages, jsonStr, currentDocId);
         } catch (e) {
           console.error("Failed to parse JSON from AI", e);
+          // Attempt to fix common JSON errors if parsing fails
+          try {
+            const fixedJson = jsonStr
+              .replace(/([{,]\s*)([a-zA-Z0-9_]+)\s*:/g, '$1"$2":') // Quote unquoted keys
+              .replace(/:\s*'([^']*)'/g, ': "$1"'); // Replace single quotes with double quotes
+            const update = JSON.parse(fixedJson);
+            const nextState = applyUpdate(update, docState);
+            if (nextState) finalDocState = nextState;
+            setLastJson(fixedJson);
+            setTimeout(() => setShowCode(false), 1000);
+            syncSession(finalDocState, messages, fixedJson, currentDocId);
+          } catch (e2) {
+            console.error("Failed to fix and parse JSON", e2);
+          }
         }
       }
 
@@ -824,6 +957,7 @@ export default function App() {
         saveCurrentDoc(finalDocState, newMessages);
         setDocState(finalDocState);
         pushToHistory(finalDocState);
+        syncSession(finalDocState, newMessages, lastJson, currentDocId);
         return newMessages;
       });
 
@@ -1012,7 +1146,10 @@ export default function App() {
 
   if (!isAuthReady) {
     return (
-      <div className="h-screen w-screen flex items-center justify-center bg-gray-50">
+      <div className={cn(
+        "h-screen w-screen flex items-center justify-center transition-colors duration-500",
+        darkMode ? "bg-[#0f172a]" : "bg-gray-50"
+      )}>
         <Loader2 className="animate-spin text-blue-600" size={48} />
       </div>
     );
@@ -1021,10 +1158,18 @@ export default function App() {
   return (
     <div className={cn(
       "flex flex-col h-screen overflow-hidden transition-colors duration-500 relative",
-      darkMode 
-        ? "bg-gradient-to-br from-[#0f172a] via-[#1e1b4b] to-[#0f172a] text-[#E0E0E0] dark" 
-        : "bg-gradient-to-br from-[#f8f9ff] via-[#eef2ff] to-[#f8f9ff] text-[#202124]"
+      darkMode ? "text-[#E0E0E0] dark" : "text-[#202124]"
     )}>
+      {/* Background Layers for Smooth Transition */}
+      <div className={cn(
+        "absolute inset-0 z-[-1] transition-opacity duration-700 bg-gradient-to-br from-[#0f172a] via-[#1e1b4b] to-[#0f172a]",
+        darkMode ? "opacity-100" : "opacity-0"
+      )} />
+      <div className={cn(
+        "absolute inset-0 z-[-1] transition-opacity duration-700 bg-gradient-to-br from-[#f8f9ff] via-[#eef2ff] to-[#f8f9ff]",
+        darkMode ? "opacity-0" : "opacity-100"
+      )} />
+
       {/* Atmospheric Background */}
       <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
         <div className={cn(
@@ -1047,10 +1192,10 @@ export default function App() {
       </div>
 
       {/* Global Header */}
-      <header className="shrink-0 z-50 transition-colors">
+      <header className="shrink-0 z-50 transition-colors duration-500">
         {/* Top Bar - Solid Background */}
         <div className={cn(
-          "flex items-center justify-between px-4 py-2 border-b transition-colors",
+          "flex items-center justify-between px-4 py-2 border-b transition-colors duration-500",
           darkMode ? "bg-[#1A1A1A] border-white/10" : "bg-white border-black/5 shadow-sm"
         )}>
           <div className="flex items-center gap-3">
@@ -1073,7 +1218,11 @@ export default function App() {
             {user ? (
               <div className="flex items-center gap-2 pl-2 border-l border-inherit ml-1">
                 <button 
-                  onClick={() => setShowHistory(!showHistory)}
+                  onClick={() => {
+                    const next = !showHistory;
+                    setShowHistory(next);
+                    if (next) setActiveTab("chat");
+                  }}
                   className={cn(
                     "p-1.5 rounded-md transition-colors mr-1",
                     showHistory ? "bg-blue-100 text-blue-600" : "hover:bg-gray-100 dark:hover:bg-[#333] text-gray-500"
@@ -1110,7 +1259,7 @@ export default function App() {
 
         {/* Session Tabs - Global (Moved above mobile switcher) */}
         <div className={cn(
-          "flex items-center gap-1 px-4 py-2 border-b overflow-x-auto custom-scrollbar shrink-0 z-30 transition-colors backdrop-blur-3xl",
+          "flex items-center gap-1 px-4 py-2 border-b overflow-x-auto custom-scrollbar shrink-0 z-30 transition-colors duration-500 backdrop-blur-3xl",
           darkMode ? "bg-black/30 border-white/10 text-white" : "bg-black/[0.18] border-black/20 text-gray-900"
         )}>
           {sessions.map(s => (
@@ -1136,75 +1285,43 @@ export default function App() {
               <FileText size={14} />
               <span className="max-w-[100px] truncate">{s.docState.title}</span>
               
-              <button 
-                onClick={(e) => { e.stopPropagation(); generateWordDoc(s.docState); }}
-                className="p-1 hover:bg-white/20 rounded transition-colors"
-                title="Download"
-              >
-                <Download size={12} />
-              </button>
+              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button 
+                  onClick={(e) => { e.stopPropagation(); generateWordDoc(s.docState); }}
+                  className="p-1.5 hover:bg-white/20 rounded transition-colors"
+                  title="Download"
+                >
+                  <Download size={14} />
+                </button>
 
-              {sessions.length > 1 && (
                 <button 
                   onClick={(e) => { 
                     e.stopPropagation(); 
-                    setConfirmAction({
-                      message: `Are you sure you want to delete "${s.docState.title}"?`,
-                      action: () => {
-                        const newSessions = sessions.filter(sess => sess.id !== s.id);
-                        setSessions(newSessions);
-                        if (activeSessionId === s.id) {
-                          const next = newSessions[0];
-                          setActiveSessionId(next.id);
-                          setDocState(next.docState);
-                          setMessages(next.messages);
-                          setLastJson(next.lastJson);
-                          setCurrentDocId(next.currentDocId);
-                          setHistory({ index: 0, stack: [next.docState] });
-                        }
-                        setConfirmAction(null);
-                      }
-                    });
+                    deleteSession(s.id);
                   }}
-                  className="p-1 hover:bg-white/20 rounded transition-colors"
+                  className="p-1.5 hover:bg-white/20 rounded transition-colors"
                   title="Delete"
                 >
-                  <X size={12} />
+                  <X size={14} />
                 </button>
-              )}
+              </div>
             </div>
           ))}
           <button 
-            onClick={() => {
-              const newId = Math.random().toString(36).substring(7);
-              const newSession: Session = {
-                id: newId,
-                docState: INITIAL_DOC_STATE,
-                messages: [],
-                lastJson: "",
-                currentDocId: null
-              };
-              setSessions([...sessions, newSession]);
-              setActiveSessionId(newId);
-              setDocState(INITIAL_DOC_STATE);
-              setMessages([]);
-              setLastJson("");
-              setCurrentDocId(null);
-              setHistory({ index: 0, stack: [INITIAL_DOC_STATE] });
-            }}
+            onClick={createNewSession}
             className={cn(
-              "p-2 rounded-lg transition-colors shrink-0",
+              "p-2 rounded-lg transition-colors shrink-0 ml-2",
               darkMode ? "hover:bg-white/10 text-gray-400" : "hover:bg-gray-100 text-gray-500"
             )}
             title="New Document"
           >
-            <Plus size={16} />
+            <Plus size={18} />
           </button>
         </div>
 
         {/* Tab Switcher */}
         <div className={cn(
-          "flex px-4 border-b border-inherit md:hidden backdrop-blur-3xl transition-colors",
+          "flex px-4 border-b border-inherit md:hidden backdrop-blur-3xl transition-colors duration-500",
           darkMode ? "bg-black/5" : "bg-black/[0.03]"
         )}>
           <button 
@@ -1248,7 +1365,7 @@ export default function App() {
           }}
           transition={{ type: "spring", bounce: 0, duration: 0.4 }}
           className={cn(
-            "flex flex-col border-r relative z-10 transition-colors overflow-hidden shrink-0",
+            "flex flex-col border-r relative z-10 transition-colors duration-500 overflow-hidden shrink-0",
             darkMode ? "border-white/5 bg-black/2 backdrop-blur-3xl" : "border-black/5 bg-black/[0.05] backdrop-blur-3xl shadow-[4px_0_24px_rgba(0,0,0,0.02)]",
             (!sidebarOpen && !isMobile) && "border-none",
             isMobile && "absolute inset-0 z-50 bg-black/[0.05] dark:bg-black/5 backdrop-blur-3xl",
@@ -1356,6 +1473,7 @@ export default function App() {
                         <div className="prose prose-sm max-w-none prose-p:leading-relaxed dark:prose-invert overflow-x-hidden">
                           <Markdown
                             components={{
+                              p: ({ children }: any) => <div className="mb-4">{children}</div>,
                               code({ node, inline, className, children, ...props }: any) {
                                 const match = /language-(\w+)/.exec(className || "");
                                 const language = match ? match[1] : "text";
@@ -1558,7 +1676,7 @@ export default function App() {
         }}
         transition={{ type: "spring", bounce: 0, duration: 0.4 }}
         className={cn(
-          "flex-1 flex flex-col overflow-hidden relative z-10 transition-colors",
+          "flex-1 flex flex-col overflow-hidden relative z-10 transition-colors duration-500",
           "bg-transparent",
           isMobile && "absolute inset-0 z-40",
           isMobile && activeTab !== "preview" && "pointer-events-none"
@@ -1566,7 +1684,7 @@ export default function App() {
       >
         {/* Document Sandbox */}
         <div className={cn(
-          "flex-1 overflow-y-auto p-4 md:p-12 custom-scrollbar transition-colors relative z-10",
+          "flex-1 overflow-y-auto p-4 md:p-12 custom-scrollbar transition-colors duration-500 relative z-10",
           "bg-transparent"
         )}>
           {/* Document Toolbar - Subheader */}
@@ -1788,6 +1906,56 @@ export default function App() {
                 </AnimatePresence>
               </div>
 
+              {/* Color Dropdown */}
+              <div className="relative">
+                <button 
+                  onClick={() => setActiveDropdown(activeDropdown === 'color' ? null : 'color')}
+                  className={cn(
+                    "flex items-center gap-1 p-1.5 rounded transition-colors",
+                    activeDropdown === 'color'
+                      ? "bg-white text-black shadow-sm"
+                      : "hover:bg-gray-100 dark:hover:bg-[#333] text-inherit"
+                  )}
+                  title="Font Color"
+                >
+                  <Palette size={16} style={{ color: focusedBlock ? docState.sections[focusedBlock.s].paragraphs[focusedBlock.p].color : 'inherit' }} />
+                  <ChevronDown size={12} className={activeDropdown === 'color' ? "text-black" : "text-gray-400"} />
+                </button>
+                <AnimatePresence>
+                  {activeDropdown === 'color' && (
+                    <motion.div 
+                      initial={{ opacity: 0, y: -5 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -5 }}
+                      className={cn(
+                        "absolute top-full left-1/2 -translate-x-1/2 mt-5 rounded-xl shadow-2xl border p-2 z-50 flex gap-2 backdrop-blur-3xl",
+                        darkMode ? "bg-black/40 border-white/10 text-white" : "bg-white/80 border-black/10 text-gray-900"
+                      )}
+                    >
+                      {[
+                        { name: "Default", value: "" },
+                        { name: "Black", value: "#000000" },
+                        { name: "Red", value: "#FF0000" },
+                        { name: "Blue", value: "#2563EB" },
+                        { name: "Green", value: "#16A34A" },
+                        { name: "Gray", value: "#6B7280" },
+                      ].map(color => (
+                        <button
+                          key={color.name}
+                          onClick={() => {
+                            updateFocusedBlock({ color: color.value || undefined });
+                            setActiveDropdown(null);
+                          }}
+                          className="w-6 h-6 rounded-full border border-gray-300 dark:border-gray-600 transition-transform hover:scale-110"
+                          style={{ backgroundColor: color.value || 'transparent' }}
+                          title={color.name}
+                        />
+                      ))}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+
               <div className="w-px h-4 bg-gray-300 dark:bg-gray-600 mx-1" />
               
               {/* Lists Dropdown */}
@@ -1868,7 +2036,7 @@ export default function App() {
           <motion.div 
             layout
             className={cn(
-              "max-w-[816px] mx-auto shadow-2xl min-h-[1056px] relative transition-colors origin-top border",
+              "max-w-[816px] mx-auto shadow-2xl min-h-[1056px] relative transition-colors duration-500 origin-top border",
               "bg-white text-gray-900",
               isMobile ? "p-4 mx-4 mb-4 rounded-xl" : "p-8 md:p-[96px]",
               isFormatPainterActive && "cursor-copy"
