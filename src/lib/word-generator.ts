@@ -213,13 +213,17 @@ export async function generateWordDoc(state: DocumentState, resolveImage?: (src:
                     const naturalWidth = img.naturalWidth;
                     const naturalHeight = img.naturalHeight;
                     
-                    const MAX_WIDTH = 600;
-                    if (naturalWidth > MAX_WIDTH) {
+                    const TARGET_HEIGHT = 310; // Approx 1/3 of A4 page height in pixels at 96 DPI
+                    const MAX_WIDTH = 600; // Approx A4 page width minus margins in pixels
+                    
+                    // Scale to 1/3 of page height
+                    finalHeight = TARGET_HEIGHT;
+                    finalWidth = (naturalWidth / naturalHeight) * TARGET_HEIGHT;
+                    
+                    // If the resulting width is still too wide, scale down based on max width
+                    if (finalWidth > MAX_WIDTH) {
                       finalWidth = MAX_WIDTH;
                       finalHeight = (naturalHeight / naturalWidth) * MAX_WIDTH;
-                    } else {
-                      finalWidth = naturalWidth;
-                      finalHeight = naturalHeight;
                     }
                     URL.revokeObjectURL(url);
                   } catch (e) {

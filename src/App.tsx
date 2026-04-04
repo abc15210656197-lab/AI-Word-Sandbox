@@ -86,6 +86,7 @@ import ImageKit from "imagekit-javascript";
 const imagekit = new ImageKit({
   urlEndpoint: import.meta.env.VITE_IMAGEKIT_URL_ENDPOINT || "",
   publicKey: import.meta.env.VITE_IMAGEKIT_PUBLIC_KEY || "",
+  // @ts-ignore
   authenticator: async () => {
     try {
       const response = await fetch(`/api/imagekit/auth`);
@@ -151,7 +152,11 @@ const SYSTEM_INSTRUCTION = `你是一个专业的 AI Word 文档助手。你的�
 - **混合样式 (Runs)**：如果同一行内需要不同的颜色、加粗样式、上标或下标，必须使用 "runs" 数组，而不是拆分成多个段落。
 - **角标支持**：在处理化学式（如 CO₂）、数学公式（如 x²）或特定单位时，必须使用 "subscript": true（下标）或 "superscript": true（上标）。严禁直接使用 unicode 的上标/下标字符。
 - **数学公式渲染**：对于复杂的数学公式（如分式、根号、积分等），必须使用 LaTeX 语法并包裹在 $ (行内) 或 $$ (独立行) 中。例如：分式使用 \frac{a}{b}，根号使用 \sqrt{x}。示例：$$T = 2\pi \sqrt{\frac{r^3}{G(M_1 + M_2)}}$$。这能确保公式以专业格式渲染。
-- **图片支持**：你可以插入图片。如果用户上传了图片，系统会在提示词中提供类似 \`[Uploaded Image URL: <url>]\` 的信息，你**必须**优先使用该 URL 作为图片的 "src"。如果用户没有提供图片，或者你认为需要额外的示意图，你可以将 "src" 留空，并在 "alt" 属性中填写详细的图片描述，系统会自动生成带有该描述的占位图。图片对象必须包含 "type": "image", "src": "...", "alt": "...", "alignment": "center"。不要编造不存在的 attachment ID。
+- **图片支持与匹配规范**：你可以插入图片。如果用户上传了图片，系统会在提示词中提供图片预览及其对应的 \`[Uploaded Image URL: <url>]\`。
+  - **精准匹配**：你必须仔细识别图片内容，并将其插入到文档中最相关的文字描述附近。严禁乱序插入或张冠李戴。
+  - **优先使用 URL**：你**必须**优先使用提示词中提供的 URL 作为图片的 "src"。
+  - **占位图**：如果用户没有提供相关图片，你可以将 "src" 留空并在 "alt" 中描述所需图片，系统会生成占位图。
+  - **格式要求**：图片对象必须包含 "type": "image", "src": "...", "alt": "...", "alignment": "center"。不要编造不存在的 attachment ID。
 - **颜色省略**：如果用户没有明确要求特定颜色，请在 JSON 中完全省略 "color" 属性。默认文本颜色在预览中始终为深灰色/黑色，不受深色模式影响。
 - **拒绝懒惰**：必须提供完整的请求内容，严禁使用 "..." 或占位符。
 
@@ -380,6 +385,8 @@ interface ChatInputAreaProps {
   setSelectedModel: (model: string) => void;
   showCode: boolean;
   setShowCode: (show: boolean) => void;
+  isDeepGeneration: boolean;
+  setIsDeepGeneration: (val: boolean) => void;
 }
 
 const ChatInputArea = React.memo(({
@@ -392,7 +399,9 @@ const ChatInputArea = React.memo(({
   selectedModel,
   setSelectedModel,
   showCode,
-  setShowCode
+  setShowCode,
+  isDeepGeneration,
+  setIsDeepGeneration
 }: ChatInputAreaProps) => {
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
@@ -494,14 +503,15 @@ const ChatInputArea = React.memo(({
 
       {/* Background element with blur to avoid nested backdrop-filter bug */}
       <div className={cn(
-        "absolute inset-0 -z-10 backdrop-blur-2xl pointer-events-none transition-all duration-500 transform-gpu will-change-[backdrop-filter]",
+        "absolute inset-0 -z-10 pointer-events-none transition-all duration-500",
+        isInputExpanded ? "backdrop-blur-2xl" : "backdrop-blur-xl",
         darkMode ? "bg-black/40 border-white/10" : "bg-white/40 border-black/10",
         isInputExpanded && (darkMode ? "bg-black/60" : "bg-white/60")
       )} />
       
       <div className={cn(
         "relative flex flex-col gap-2 transition-all duration-500",
-        isInputExpanded && (darkMode ? "bg-black/20 p-4 rounded-xl border border-white/10 shadow-2xl h-full" : "bg-white/20 p-4 rounded-xl border border-black/10 shadow-2xl h-full")
+        isInputExpanded && (darkMode ? "bg-black/40 p-4 rounded-xl border border-white/10 shadow-2xl h-full backdrop-blur-xl" : "bg-white/60 p-4 rounded-xl border border-black/10 shadow-2xl h-full backdrop-blur-xl")
       )}>
         {isInputExpanded && (
           <div className="flex justify-between items-center mb-4">
@@ -553,7 +563,7 @@ const ChatInputArea = React.memo(({
           }}
           placeholder="Type your instructions (e.g., 'Create a resume for...')"
           className={cn(
-            "w-full p-4 pr-12 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all resize-y shadow-inner backdrop-blur-xl transform-gpu will-change-[backdrop-filter]",
+            "w-full p-4 pr-12 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all resize-y shadow-inner backdrop-blur-xl",
             darkMode ? "bg-black/20 border-white/10 text-white placeholder:text-white/30" : "bg-black/[0.03] border-black/10 text-gray-900 placeholder:text-gray-400",
             isInputExpanded ? "flex-1 resize-none" : "min-h-[100px]"
           )}
@@ -593,6 +603,17 @@ const ChatInputArea = React.memo(({
               onChange={setSelectedModel} 
               darkMode={darkMode} 
             />
+            <button 
+              onClick={() => setIsDeepGeneration(!isDeepGeneration)}
+              className={cn(
+                "p-2 rounded-lg transition-colors flex items-center gap-1.5 text-xs font-medium",
+                isDeepGeneration ? "bg-purple-100 text-purple-600" : "hover:bg-gray-100 text-gray-500"
+              )}
+              title="Toggle Deep Generation (Auto-Pilot)"
+            >
+              <div className={cn("w-2 h-2 rounded-full", isDeepGeneration ? "bg-purple-500 animate-pulse" : "bg-gray-400")} />
+              Deep Gen
+            </button>
             <button 
               onClick={() => setShowCode(!showCode)}
               className={cn(
@@ -644,6 +665,7 @@ export default function App() {
   ]);
   const [activeSessionId, setActiveSessionId] = useState<string>("initial");
   const activeSessionIdRef = useRef(activeSessionId);
+  const deepGenCancelRef = useRef(false);
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
@@ -698,6 +720,13 @@ export default function App() {
   const [isFormatPainterActive, setIsFormatPainterActive] = useState(false);
   const [isInputExpanded, setIsInputExpanded] = useState(false);
   const [activeDropdown, setActiveDropdown] = useState<'font' | 'align' | 'list' | 'color' | null>(null);
+  const [isDeepGenerationMode, setIsDeepGenerationMode] = useState(false);
+  const [deepGenState, setDeepGenState] = useState<{
+    isActive: boolean;
+    tasks: string[];
+    currentIndex: number;
+    originalPrompt: string;
+  }>({ isActive: false, tasks: [], currentIndex: 0, originalPrompt: "" });
   
   const [history, setHistory] = useState({
     index: 0,
@@ -1105,6 +1134,8 @@ export default function App() {
     return next;
   };
 
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+
   const handleSendMessage = async (promptToUse: string, attachments: ChatAttachment[] = [], isRetry: boolean = false) => {
     if ((!promptToUse.trim() && attachments.length === 0) || !aiRef.current || isLoading) return;
 
@@ -1208,42 +1239,242 @@ export default function App() {
     try {
       const currentDocState = session.docState;
       const userRequestText = promptToUse.trim() || (attachments.length > 0 ? "请处理我上传的文件并根据其内容更新文档。" : "");
-      const contextPrompt = `CURRENT DOCUMENT STATE: ${JSON.stringify(currentDocState)}\n\nUSER REQUEST: ${userRequestText}`;
-
-      // Limit history to last 10 messages and remove images from older messages to save memory
-      const historyToKeep = currentMessages.slice(-10, -1);
       
-      const contents = [
-        ...historyToKeep.map((m, idx) => {
-          // Note: History messages no longer have 'data' (base64) to save memory
-          return {
-            role: m.role,
+      if (isDeepGenerationMode && !isRetry) {
+        deepGenCancelRef.current = false;
+        // --- PHASE 1: PLANNER ---
+        const addModelPlaceholder = (prev: ChatMessage[]): ChatMessage[] => [...prev, { role: "model", text: "正在规划任务大纲...", steps: [], isStreaming: true }];
+        if (activeSessionIdRef.current === sessionId) setMessages(addModelPlaceholder);
+        setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, messages: addModelPlaceholder(s.messages) } : s));
+        
+        const outlinePrompt = `You are a Planner Agent. The user wants to generate a large document or perform a complex task.
+USER REQUEST: ${userRequestText}
+
+Your goal is to break this request into a sequence of highly granular, manageable tasks to ensure maximum detail and avoid AI laziness.
+Guidelines:
+1. Each task should focus on a specific section, a specific set of points, or a specific range of content (e.g., "Detailed expansion of the 'Personal Experience' section", "In-depth summary of the first 10 pages of notes").
+2. Tasks must be strictly sequential and collectively cover the entire user request without gaps.
+3. For complex requests, aim for 5-12 granular tasks.
+4. If the user mentions "parts", "sections", or "pages", use those as natural boundaries for tasks.
+
+Output ONLY a valid JSON array of strings, where each string is a specific, detailed task description for the Writer Agent. Do not output markdown code blocks, just the JSON array.
+Example: ["Write a detailed Introduction and Background", "Develop the first main chapter: Market Trends", "Develop the second main chapter: Competitive Landscape", "Write the detailed Conclusion and Recommendations"]`;
+
+        const outlineContents = [
+          {
+            role: "user",
             parts: [
-              ...(m.attachments?.map(att => ({
-                text: `[Uploaded Image URL: ${att.url || `attachment://${att.id}`}] (File Name: ${att.name})`
-              })) || []),
-              { text: m.text || (m.role === 'user' && m.attachments && m.attachments.length > 0 ? "（上传了文件）" : "") }
+              ...(currentAttachmentsWithData.flatMap(att => {
+                const parts = [];
+                if (att.data && att.type) {
+                  parts.push({
+                    inlineData: {
+                      data: att.data!,
+                      mimeType: att.type!
+                    }
+                  });
+                }
+                parts.push({
+                  text: `[Uploaded Image URL: ${att.url || `attachment://${att.id}`}] (File Name: ${att.name})`
+                });
+                return parts;
+              })),
+              { text: outlinePrompt }
             ]
-          };
-        }),
-        {
-          role: "user",
-          parts: [
-            ...(currentAttachmentsWithData
-              .filter(att => att.data && att.type)
-              .map(att => ({
-              inlineData: {
-                data: att.data!,
-                mimeType: att.type!
-              }
-            }))),
-            ...(currentAttachmentsWithData.map(att => ({
-              text: `[Uploaded Image URL: ${att.url || `attachment://${att.id}`}] (File Name: ${att.name})`
-            }))),
-            { text: contextPrompt }
-          ]
+          }
+        ];
+
+        const outlineResponse = await aiRef.current.models.generateContent({
+          model: selectedModel,
+          contents: outlineContents as any,
+          config: {
+            responseMimeType: "application/json",
+            ...(selectedModel === "gemini-3.1-pro-preview" ? { thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH } } : {}),
+          }
+        });
+
+        let tasks: string[] = [];
+        try {
+          tasks = JSON.parse(outlineResponse.text || "[]");
+          if (!Array.isArray(tasks)) tasks = [userRequestText];
+        } catch (e) {
+          console.error("Failed to parse outline", e);
+          tasks = [userRequestText];
         }
-      ];
+
+        setDeepGenState({ isActive: true, tasks, currentIndex: 0, originalPrompt: userRequestText });
+
+        // --- PHASE 2: WRITER LOOP ---
+        let loopDocState = currentDocState;
+        let finalFullText = `已自动拆分为 ${tasks.length} 个子任务：\n` + tasks.map((t, i) => `${i + 1}. ${t}`).join('\n') + '\n\n';
+        
+        for (let i = 0; i < tasks.length; i++) {
+          if (activeSessionIdRef.current !== sessionId || deepGenCancelRef.current) break;
+          const task = tasks[i];
+          setDeepGenState(prev => ({ ...prev, currentIndex: i }));
+          
+          const updateMessageText = (prev: ChatMessage[]): ChatMessage[] => {
+            const newMsgs = [...prev];
+            newMsgs[newMsgs.length - 1] = { ...newMsgs[newMsgs.length - 1], text: finalFullText + `\n\n⏳ **正在执行任务 ${i + 1}/${tasks.length}:** ${task}...`, isStreaming: true };
+            return newMsgs;
+          };
+          if (activeSessionIdRef.current === sessionId) setMessages(updateMessageText);
+          setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, messages: updateMessageText(s.messages) } : s));
+
+          const taskPrompt = `You are a Writer Agent. We are generating a document step by step to ensure high quality and avoid laziness.
+OVERALL GOAL: ${userRequestText}
+PROGRESS: Task ${i + 1} of ${tasks.length}
+COMPLETED TASKS SO FAR: ${i > 0 ? tasks.slice(0, i).join(' -> ') : 'None'}
+CURRENT DOCUMENT STATE: ${JSON.stringify(loopDocState)}
+YOUR CURRENT TASK: ${task}
+
+Please generate ONLY the content for your current task. 
+CRITICAL INSTRUCTIONS:
+1. **NO LAZINESS**: You must provide full, rich, and detailed content. Do NOT summarize if the task asks for expansion.
+2. **NO PLACEHOLDERS**: Never use "..." or "[Content continues...]" or similar. Write everything out.
+3. **CONTEXT**: Maintain perfect consistency with the existing document state.
+4. **OUTPUT FORMAT**: 
+   - First, provide a brief explanation of what you are doing for this task in Chinese.
+   - Then, provide the JSON update in a markdown code block (e.g., \`\`\`json ... \`\`\`).
+   - Use type: "append" to add content to the end of the document, or "full" if you need to restructure.`;
+
+          const taskContents = [
+            {
+              role: "user",
+              parts: [
+                ...(currentAttachmentsWithData.flatMap(att => {
+                  const parts = [];
+                  if (att.data && att.type) {
+                    parts.push({
+                      inlineData: {
+                        data: att.data!,
+                        mimeType: att.type!
+                      }
+                    });
+                  }
+                  parts.push({
+                    text: `[Uploaded Image URL: ${att.url || `attachment://${att.id}`}] (File Name: ${att.name})`
+                  });
+                  return parts;
+                })),
+                { text: taskPrompt }
+              ]
+            }
+          ];
+
+          const taskResponseStream = await aiRef.current.models.generateContentStream({
+            model: selectedModel,
+            contents: taskContents as any,
+            config: {
+              systemInstruction: SYSTEM_INSTRUCTION,
+              ...(selectedModel === "gemini-3.1-pro-preview" ? { thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH } } : {}),
+            }
+          });
+
+          let taskText = "";
+          for await (const chunk of taskResponseStream) {
+            if (activeSessionIdRef.current !== sessionId || deepGenCancelRef.current) break;
+            taskText += chunk.text;
+          }
+
+          // Parse and apply update
+          let explanation = "";
+          try {
+            const jsonMatch = taskText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+            if (jsonMatch) {
+              explanation = taskText.substring(0, jsonMatch.index).trim();
+              const jsonStr = jsonMatch[1];
+              const parsed = JSON.parse(jsonStr);
+              loopDocState = applyUpdate(parsed, loopDocState);
+              
+              if (activeSessionIdRef.current === sessionId) {
+                setDocState(loopDocState);
+                pushToHistory(loopDocState);
+              }
+              setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, docState: loopDocState } : s));
+            } else {
+              // Fallback if no JSON block found
+              explanation = taskText;
+            }
+          } catch (e) {
+            console.error(`Failed to parse JSON for task ${i + 1}`, e);
+            explanation = taskText;
+          }
+
+          finalFullText += `\n\n✅ **任务 ${i + 1} 完成:** ${task}\n${explanation ? `> ${explanation.split('\n').join('\n> ')}` : ""}`;
+          
+          const finishTaskMessage = (prev: ChatMessage[]): ChatMessage[] => {
+            const newMsgs = [...prev];
+            newMsgs[newMsgs.length - 1] = { ...newMsgs[newMsgs.length - 1], text: finalFullText, isStreaming: i < tasks.length - 1 };
+            return newMsgs;
+          };
+          if (activeSessionIdRef.current === sessionId) setMessages(finishTaskMessage);
+          setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, messages: finishTaskMessage(s.messages) } : s));
+        }
+        
+        setDeepGenState(prev => ({ ...prev, isActive: false }));
+        
+        const finalMessagesUpdater = (prev: ChatMessage[]): ChatMessage[] => {
+          const newMessages = [...prev];
+          if (newMessages.length > 0) {
+            newMessages[newMessages.length - 1] = { 
+              role: "model", 
+              text: finalFullText + (deepGenCancelRef.current ? "\n\n⚠️ **深度生成已取消。**" : "\n\n🎉 **所有任务已完成！**"),
+              isStreaming: false
+            };
+          }
+          return newMessages;
+        };
+
+        if (activeSessionIdRef.current === sessionId) {
+          setMessages(finalMessagesUpdater);
+        }
+        
+        const finalMessages = finalMessagesUpdater(addModelPlaceholder(currentMessages));
+        syncSession(sessionId, loopDocState, finalMessages, "", sessionDocId, sessionShowCode);
+        saveCurrentDoc(loopDocState, finalMessages, sessionDocId);
+
+      } else {
+        const contextPrompt = `CURRENT DOCUMENT STATE: ${JSON.stringify(currentDocState)}\n\nUSER REQUEST: ${userRequestText}`;
+
+        // Limit history to last 10 messages and remove images from older messages to save memory
+        const historyToKeep = currentMessages.slice(-10, -1);
+        
+        const contents = [
+          ...historyToKeep.map((m, idx) => {
+            // Note: History messages no longer have 'data' (base64) to save memory
+            return {
+              role: m.role,
+              parts: [
+                ...(m.attachments?.map(att => ({
+                  text: `[Uploaded Image URL: ${att.url || `attachment://${att.id}`}] (File Name: ${att.name})`
+                })) || []),
+                { text: m.text || (m.role === 'user' && m.attachments && m.attachments.length > 0 ? "（上传了文件）" : "") }
+              ]
+            };
+          }),
+          {
+            role: "user",
+            parts: [
+              ...(currentAttachmentsWithData.flatMap(att => {
+                const parts = [];
+                if (att.data && att.type) {
+                  parts.push({
+                    inlineData: {
+                      data: att.data!,
+                      mimeType: att.type!
+                    }
+                  });
+                }
+                parts.push({
+                  text: `[Uploaded Image URL: ${att.url || `attachment://${att.id}`}] (File Name: ${att.name})`
+                });
+                return parts;
+              })),
+              { text: contextPrompt }
+            ]
+          }
+        ];
 
       let responseStream;
       let retries = 0;
@@ -1413,7 +1644,7 @@ export default function App() {
       const finalMessages = finalMessagesUpdater(addModelPlaceholder(currentMessages));
       syncSession(sessionId, finalDocState, finalMessages, finalJson, sessionDocId, sessionShowCode);
       saveCurrentDoc(finalDocState, finalMessages, sessionDocId);
-
+      }
     } catch (error) {
       console.error("AI Error:", error);
       const errorUpdater = (prev: ChatMessage[]): ChatMessage[] => {
@@ -1918,8 +2149,9 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                         alt={img.alt || ""} 
                         width={img.width}
                         height={img.height}
-                        className="max-w-full h-auto rounded-lg shadow-sm border border-gray-200"
+                        className="max-w-full h-auto rounded-lg shadow-sm border border-gray-200 cursor-pointer hover:opacity-90 transition-opacity"
                         referrerPolicy="no-referrer"
+                        onClick={() => setSelectedImage(resolveImageUrl(img.src, img.alt))}
                       />
                       {img.caption && (
                         <figcaption className="mt-2 text-sm text-gray-500 text-center">
@@ -2620,6 +2852,42 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
           </AnimatePresence>
         </div>
 
+        {/* Deep Generation Progress */}
+        {deepGenState.isActive && (
+          <div className="px-4 pb-2">
+            <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-3">
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-sm font-medium text-blue-800 dark:text-blue-300">
+                  深度生成中 ({deepGenState.currentIndex + 1}/{Math.max(1, deepGenState.tasks.length)})
+                </span>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-blue-600 dark:text-blue-400">
+                    {Math.round(((deepGenState.currentIndex) / Math.max(1, deepGenState.tasks.length)) * 100)}%
+                  </span>
+                  <button 
+                    onClick={() => {
+                      deepGenCancelRef.current = true;
+                      setDeepGenState(prev => ({ ...prev, isActive: false }));
+                    }}
+                    className="text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+              <div className="w-full bg-blue-200 dark:bg-blue-800 rounded-full h-2">
+                <div 
+                  className="bg-blue-600 dark:bg-blue-500 h-2 rounded-full transition-all duration-500" 
+                  style={{ width: `${((deepGenState.currentIndex) / Math.max(1, deepGenState.tasks.length)) * 100}%` }}
+                ></div>
+              </div>
+              <div className="mt-2 text-xs text-blue-700 dark:text-blue-400 truncate">
+                当前任务: {deepGenState.tasks[deepGenState.currentIndex] || "规划中..."}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Larger Input Area */}
         <ChatInputArea
           onSendMessage={handleSendMessage}
@@ -2632,6 +2900,8 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
           setSelectedModel={setSelectedModel}
           showCode={showCode}
           setShowCode={setShowCode}
+          isDeepGeneration={isDeepGenerationMode}
+          setIsDeepGeneration={setIsDeepGenerationMode}
         />
       </div>
     </motion.div>
@@ -3101,6 +3371,36 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
         </AnimatePresence>
       </motion.main>
       </div>
+
+      {/* Image Zoom Modal */}
+      <AnimatePresence>
+        {selectedImage && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-md p-4 cursor-zoom-out"
+            onClick={() => setSelectedImage(null)}
+          >
+            <motion.img
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              transition={{ type: "spring", damping: 25, stiffness: 300 }}
+              src={selectedImage}
+              alt="Zoomed"
+              className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            />
+            <button
+              className="absolute top-4 right-4 text-white/70 hover:text-white bg-black/20 hover:bg-black/40 rounded-full p-2 transition-colors"
+              onClick={() => setSelectedImage(null)}
+            >
+              <X className="w-6 h-6" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Confirm Modal */}
       {confirmAction && (
