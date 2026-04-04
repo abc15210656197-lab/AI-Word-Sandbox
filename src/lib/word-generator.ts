@@ -7,12 +7,77 @@ import {
   AlignmentType, 
   LevelFormat, 
   WidthType, 
-  BorderStyle 
+  BorderStyle,
+  Table,
+  TableRow,
+  TableCell,
+  VerticalAlign,
+  ImageRun
 } from "docx";
 import { saveAs } from "file-saver";
-import { DocumentState } from "../types";
+import { DocumentState, DocParagraph, DocTable, DocImage } from "../types";
 
-export async function generateWordDoc(state: DocumentState) {
+export async function generateWordDoc(state: DocumentState, resolveImage?: (src: string, alt?: string) => Promise<Uint8Array | string | null>) {
+  const extractFont = (fontFamily?: string) => {
+    if (!fontFamily) return undefined;
+    const firstFont = fontFamily.split(',')[0].replace(/['"]/g, '').trim();
+    return firstFont;
+  };
+
+  const createParagraph = (p: DocParagraph) => {
+    let heading;
+    if (p.isHeading) {
+      switch (p.headingLevel) {
+        case 1: heading = HeadingLevel.HEADING_1; break;
+        case 2: heading = HeadingLevel.HEADING_2; break;
+        case 3: heading = HeadingLevel.HEADING_3; break;
+        case 4: heading = HeadingLevel.HEADING_4; break;
+        case 5: heading = HeadingLevel.HEADING_5; break;
+        case 6: heading = HeadingLevel.HEADING_6; break;
+        default: heading = HeadingLevel.HEADING_1;
+      }
+    }
+
+    let alignment;
+    switch (p.alignment) {
+      case "center": alignment = AlignmentType.CENTER; break;
+      case "right": alignment = AlignmentType.RIGHT; break;
+      case "justify": alignment = AlignmentType.JUSTIFIED; break;
+      default: alignment = AlignmentType.LEFT;
+    }
+
+    let numbering;
+    if (p.isBullet) {
+      numbering = { reference: "bullets", level: 0 };
+    } else if (p.isNumbering) {
+      numbering = { reference: "numbers", level: 0 };
+    }
+
+    const children = p.runs ? p.runs.map(run => new TextRun({
+      text: run.text,
+      bold: run.isBold,
+      italics: run.isItalic,
+      color: run.color?.replace("#", ""),
+      font: extractFont(run.fontFamily) || extractFont(p.fontFamily),
+    })) : [
+      new TextRun({
+        text: p.text || "",
+        bold: p.isBold,
+        italics: p.isItalic,
+        color: p.color?.replace("#", ""),
+        font: extractFont(p.fontFamily),
+      }),
+    ];
+
+    return new Paragraph({
+      heading,
+      alignment,
+      numbering,
+      spacing: { before: 120, after: 120 },
+      children,
+    });
+  };
+
   const doc = new Document({
     styles: {
       default: {
@@ -94,67 +159,97 @@ export async function generateWordDoc(state: DocumentState) {
             margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 }, // 1 inch
           },
         },
-        children: state.sections.flatMap((section) =>
-          section.paragraphs.map((p) => {
-            let heading;
-            if (p.isHeading) {
-              switch (p.headingLevel) {
-                case 1: heading = HeadingLevel.HEADING_1; break;
-                case 2: heading = HeadingLevel.HEADING_2; break;
-                case 3: heading = HeadingLevel.HEADING_3; break;
-                case 4: heading = HeadingLevel.HEADING_4; break;
-                case 5: heading = HeadingLevel.HEADING_5; break;
-                case 6: heading = HeadingLevel.HEADING_6; break;
-                default: heading = HeadingLevel.HEADING_1;
+        children: await Promise.all(state.sections.flatMap((section) =>
+          section.paragraphs.map(async (p) => {
+            if (p.type === 'table') {
+              const tableData = p as DocTable;
+              return new Table({
+                width: {
+                  size: tableData.width ? parseInt(tableData.width) : 100,
+                  type: tableData.width?.includes('%') ? WidthType.PERCENTAGE : WidthType.AUTO,
+                },
+                rows: (tableData.rows || []).map(row => new TableRow({
+                  children: (row.cells || []).map(cell => new TableCell({
+                    children: (cell.content || []).map(cp => createParagraph(cp)),
+                    shading: cell.backgroundColor ? { fill: cell.backgroundColor.replace("#", "") } : undefined,
+                    verticalAlign: cell.verticalAlign === 'center' ? VerticalAlign.CENTER : 
+                                  cell.verticalAlign === 'bottom' ? VerticalAlign.BOTTOM : 
+                                  VerticalAlign.TOP,
+                  })),
+                })),
+              });
+            }
+            if (p.type === 'image') {
+              const imgData = p as DocImage;
+              let imageData: Uint8Array | string | null = null;
+
+              if (imgData.src.startsWith('data:')) {
+                const base64 = imgData.src.split(',')[1];
+                const binary = atob(base64);
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) {
+                  bytes[i] = binary.charCodeAt(i);
+                }
+                imageData = bytes;
+              } else if (resolveImage) {
+                imageData = await resolveImage(imgData.src, imgData.alt);
               }
+
+              if (imageData) {
+                let finalWidth = imgData.width;
+                let finalHeight = imgData.height;
+
+                if (!finalWidth || !finalHeight) {
+                  try {
+                    const blob = new Blob([imageData]);
+                    const url = URL.createObjectURL(blob);
+                    const img = new Image();
+                    img.src = url;
+                    await new Promise((resolve, reject) => {
+                      img.onload = resolve;
+                      img.onerror = reject;
+                    });
+                    
+                    const naturalWidth = img.naturalWidth;
+                    const naturalHeight = img.naturalHeight;
+                    
+                    const MAX_WIDTH = 600;
+                    if (naturalWidth > MAX_WIDTH) {
+                      finalWidth = MAX_WIDTH;
+                      finalHeight = (naturalHeight / naturalWidth) * MAX_WIDTH;
+                    } else {
+                      finalWidth = naturalWidth;
+                      finalHeight = naturalHeight;
+                    }
+                    URL.revokeObjectURL(url);
+                  } catch (e) {
+                    console.error("Failed to get image dimensions", e);
+                    finalWidth = 400;
+                    finalHeight = 300;
+                  }
+                }
+
+                return new Paragraph({
+                  alignment: imgData.alignment === 'center' ? AlignmentType.CENTER : 
+                             imgData.alignment === 'right' ? AlignmentType.RIGHT : 
+                             AlignmentType.LEFT,
+                  children: [
+                    new ImageRun({
+                      data: imageData as any,
+                      transformation: {
+                        width: finalWidth,
+                        height: finalHeight,
+                      },
+                    } as any),
+                    ...(imgData.caption ? [new TextRun({ text: "\n" + imgData.caption, italics: true })] : [])
+                  ],
+                });
+              }
+              return new Paragraph({ children: [new TextRun({ text: "[Image: " + imgData.src + "]" })] });
             }
-
-            let alignment;
-            switch (p.alignment) {
-              case "center": alignment = AlignmentType.CENTER; break;
-              case "right": alignment = AlignmentType.RIGHT; break;
-              case "justify": alignment = AlignmentType.JUSTIFIED; break;
-              default: alignment = AlignmentType.LEFT;
-            }
-
-            let numbering;
-            if (p.isBullet) {
-              numbering = { reference: "bullets", level: 0 };
-            } else if (p.isNumbering) {
-              numbering = { reference: "numbers", level: 0 };
-            }
-
-            const extractFont = (fontFamily?: string) => {
-              if (!fontFamily) return undefined;
-              const firstFont = fontFamily.split(',')[0].replace(/['"]/g, '').trim();
-              return firstFont;
-            };
-
-            const children = p.runs ? p.runs.map(run => new TextRun({
-              text: run.text,
-              bold: run.isBold,
-              italics: run.isItalic,
-              color: run.color?.replace("#", ""),
-              font: extractFont(run.fontFamily) || extractFont(p.fontFamily),
-            })) : [
-              new TextRun({
-                text: p.text || "",
-                bold: p.isBold,
-                italics: p.isItalic,
-                color: p.color?.replace("#", ""),
-                font: extractFont(p.fontFamily),
-              }),
-            ];
-
-            return new Paragraph({
-              heading,
-              alignment,
-              numbering,
-              spacing: { before: 120, after: 120 },
-              children,
-            });
+            return createParagraph(p as DocParagraph);
           })
-        ),
+        )).then(res => res.flat()),
       },
     ],
   });

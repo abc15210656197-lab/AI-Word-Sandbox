@@ -70,11 +70,14 @@ service cloud.firestore {
         allow create: if isOwner(uid) && isValidLoginHistory(request.resource.data);
       }
 
-      match /documents/{docId} {
+      match /documents {
         allow read: if isOwner(uid) || isAdmin();
-        allow create: if isOwner(uid) && isValidDocument(request.resource.data);
-        allow update: if isOwner(uid) && isValidDocument(request.resource.data);
-        allow delete: if isOwner(uid) || isAdmin();
+        match /{docId} {
+          allow read: if isOwner(uid) || isAdmin();
+          allow create: if isOwner(uid) && isValidDocument(request.resource.data);
+          allow update: if isOwner(uid) && isValidDocument(request.resource.data);
+          allow delete: if isOwner(uid) || isAdmin();
+        }
       }
     }
   }

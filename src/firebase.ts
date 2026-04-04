@@ -2,7 +2,8 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
 import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, orderBy, limit, onSnapshot, getDocFromServer } from 'firebase/firestore';
 // @ts-ignore
-import firebaseConfig from '@/firebase-applet-config.json';
+import firebaseConfig from '../firebase-applet-config.json';
+import { replacer } from './lib/json-utils';
 
 // Initialize Firebase SDK
 const app = initializeApp(firebaseConfig);
@@ -57,8 +58,8 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     operationType,
     path
   }
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  console.error('Firestore Error: ', JSON.stringify(errInfo, replacer));
+  throw new Error(JSON.stringify(errInfo, replacer));
 }
 
 // Test connection

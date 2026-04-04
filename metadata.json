@@ -1,5 +1,5 @@
 {
-  "name": "AI Word Sandbox",
-  "description": "An AI-powered Word document editor that allows you to create and edit documents through conversation and export them as .docx files.",
+  "name": "AI Doc Editor",
+  "description": "An AI-powered document editor with formula support and document isolation.",
   "requestFramePermissions": []
 }
