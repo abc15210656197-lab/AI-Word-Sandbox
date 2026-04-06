@@ -9,6 +9,7 @@ export interface DocRun {
   isItalic?: boolean;
   color?: string;
   fontFamily?: string;
+  fontSize?: string;
   subscript?: boolean;
   superscript?: boolean;
   isFormula?: boolean;
@@ -27,6 +28,7 @@ export interface DocParagraph {
   alignment?: 'left' | 'center' | 'right' | 'justify';
   color?: string; // Default color for the whole paragraph
   fontFamily?: string; // Default font for the whole paragraph
+  fontSize?: string; // Default font size for the whole paragraph
   subscript?: boolean;
   superscript?: boolean;
 }
@@ -84,6 +86,7 @@ export interface ChatAttachment {
   file?: File; // For client-side handling
   previewUrl?: string; // For UI display
   url?: string; // Cloud storage URL (e.g., ImageKit)
+  extractedText?: string; // For documents like DOCX
 }
 
 export interface ChatMessage {
@@ -92,4 +95,5 @@ export interface ChatMessage {
   steps?: string[];
   isStreaming?: boolean;
   attachments?: ChatAttachment[];
+  isError?: boolean;
 }

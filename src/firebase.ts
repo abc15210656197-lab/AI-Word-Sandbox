@@ -65,11 +65,19 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 // Test connection
 async function testConnection() {
   try {
-    // Attempt to get a non-existent doc to test connectivity
-    await getDoc(doc(db, 'test', 'connection'));
+    // Attempt to get a non-existent doc from server to test connectivity
+    await getDocFromServer(doc(db, 'test', 'connection'));
+    console.log("Firestore connection successful.");
   } catch (error) {
-    if(error instanceof Error && error.message.includes('the client is offline')) {
-      console.error("Please check your Firebase configuration. ");
+    if (error instanceof Error) {
+      if (error.message.includes('the client is offline')) {
+        console.error("Firestore Error: The client is offline. Please check your Firebase configuration and internet connection.");
+      } else if (error.message.includes('permission-denied') || error.message.includes('Missing or insufficient permissions')) {
+        // Permission denied is actually a good sign - it means we reached the server!
+        console.log("Firestore connection reached server (Permission Denied as expected).");
+      } else {
+        console.error("Firestore Connection Error:", error.message);
+      }
     }
   }
 }

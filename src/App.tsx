@@ -46,7 +46,10 @@ import {
   Type,
   ChevronDown,
   Undo,
-  Redo
+  Redo,
+  Languages,
+  Upload,
+  Sparkles
 } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkMath from "remark-math";
@@ -57,6 +60,7 @@ import { vscDarkPlus, vs } from "react-syntax-highlighter/dist/esm/styles/prism"
 import { cn } from "./lib/utils";
 import { DocumentState, ChatMessage, ChatAttachment, DocTable, DocParagraph, DocImage } from "./types";
 import { generateWordDoc } from "./lib/word-generator";
+import { parseWordDoc } from "./lib/word-parser";
 import { 
   auth, 
   db, 
@@ -110,6 +114,9 @@ interface Session {
   lastJson: string;
   currentDocId: string | null;
   showCode: boolean;
+  isAgentMode: boolean;
+  turnHistory: {docState: DocumentState, messages: ChatMessage[]}[];
+  isLoading?: boolean;
 }
 
 const INITIAL_DOC_STATE: DocumentState = {
@@ -131,6 +138,93 @@ const INITIAL_DOC_STATE: DocumentState = {
       ]
     }
   ]
+};
+
+const translations = {
+  en: {
+    chat: "Chat",
+    preview: "Preview",
+    agent: "Agent",
+    showCode: "Show Code",
+    hideCode: "Hide Code",
+    attachFile: "Attach File",
+    typeInstructions: "Type your instructions (e.g., 'Create a resume for...')",
+    expandedEditor: "Expanded Editor",
+    dropFiles: "Drop files to upload",
+    savedDocs: "Saved Documents",
+    backToChat: "Back to Chat",
+    noSavedDocs: "No saved documents yet.",
+    helloAssistant: "Hello! I'm your AI Word Assistant. Tell me what kind of document you'd like to create today.",
+    copy: "Copy",
+    planningTasks: "Planning tasks outline...",
+    tasksSplit: (count: number) => `Automatically split into ${count} sub-tasks:`,
+    deepGenCancelled: "⚠️ Deep generation cancelled.",
+    allTasksCompleted: "🎉 All tasks completed!",
+    cancel: "Cancel",
+    processing: "Processing...",
+    task: "Task",
+    export: "Export",
+    downloadDocx: "Download as .docx",
+    downloadPdf: "Download as .pdf",
+    undo: "Undo",
+    redo: "Redo",
+    zoom: "Zoom",
+    close: "Close",
+    loginWithGoogle: "Login with Google",
+    logout: "Logout",
+    toggleDarkMode: "Toggle Dark Mode",
+    newDocument: "New Document",
+    history: "History",
+    delete: "Delete",
+    confirmDelete: (title: string) => `Are you sure you want to delete "${title}"?`,
+    switchLang: "Switch to Chinese",
+    myDocs: "My Documents",
+    aiStructure: "AI Generated Structure",
+    undoTurn: "Undo Turn",
+    aiDrafting: "AI is drafting...",
+  },
+  zh: {
+    chat: "对话",
+    preview: "预览",
+    agent: "智能体",
+    showCode: "显示代码",
+    hideCode: "隐藏代码",
+    attachFile: "附件",
+    typeInstructions: "输入您的指令（例如：'为...创建一个简历'）",
+    expandedEditor: "全屏编辑器",
+    dropFiles: "拖拽文件上传",
+    savedDocs: "已保存文档",
+    backToChat: "返回对话",
+    noSavedDocs: "暂无保存的文档。",
+    helloAssistant: "你好！我是您的 AI 文档助手。告诉我您今天想创建什么样的文档。",
+    copy: "复制",
+    planningTasks: "正在规划任务大纲...",
+    tasksSplit: (count: number) => `已自动拆分为 ${count} 个子任务：`,
+    deepGenCancelled: "⚠️ 深度生成已取消。",
+    allTasksCompleted: "🎉 所有任务已完成！",
+    cancel: "取消",
+    processing: "处理中...",
+    task: "任务",
+    export: "导出",
+    downloadDocx: "下载为 .docx",
+    downloadPdf: "下载为 .pdf",
+    undo: "撤销",
+    redo: "重做",
+    zoom: "缩放",
+    close: "关闭",
+    loginWithGoogle: "谷歌登录",
+    logout: "退出登录",
+    toggleDarkMode: "切换暗色模式",
+    newDocument: "新建文档",
+    history: "历史记录",
+    delete: "删除",
+    confirmDelete: (title: string) => `您确定要删除 "${title}" 吗？`,
+    switchLang: "切换为英文",
+    myDocs: "我的文档",
+    aiStructure: "AI 生成结构",
+    undoTurn: "撤回",
+    aiDrafting: "AI 正在起草...",
+  }
 };
 
 const SYSTEM_INSTRUCTION = `你是一个专业的 AI Word 文档助手。你的目标是帮助用户通过持续编辑系统创建和编辑高质量的 Word 文档。
@@ -287,8 +381,23 @@ Run 结构属性：text, isBold, isItalic, color。
 
 注意：如果用户没有要求特定颜色，请在 JSON 中省略 "color" 属性。预览时文档背景始终为白色，文字默认为黑色。`;
 
-function ModelSelector({ selected, onChange, darkMode }: { selected: string, onChange: (val: string) => void, darkMode: boolean }) {
+function ModelSelector({ 
+  selected, 
+  onChange, 
+  darkMode, 
+  isAgentMode, 
+  setIsAgentMode,
+  lang
+}: { 
+  selected: string, 
+  onChange: (val: string) => void, 
+  darkMode: boolean,
+  isAgentMode: boolean,
+  setIsAgentMode: (val: boolean) => void,
+  lang: 'en' | 'zh'
+}) {
   const [isOpen, setIsOpen] = useState(false);
+  const t = translations[lang];
   const models = [
     { id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro", icon: "✨", desc: "Best for complex reasoning & logic" },
     { id: "gemini-3-flash-preview", name: "Gemini 3 Flash", icon: "⚡", desc: "Fast and versatile for most tasks" },
@@ -309,8 +418,15 @@ function ModelSelector({ selected, onChange, darkMode }: { selected: string, onC
                 : "bg-white/50 border-black/5 text-gray-700 hover:bg-white/70")
         )}
       >
-        <span className="text-lg">{selectedModel.icon}</span>
-        <span>{selectedModel.name}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-lg">{selectedModel.icon}</span>
+          <span>{selectedModel.name}</span>
+          {isAgentMode && (
+            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-purple-500/20 text-purple-400 text-[10px] font-bold uppercase tracking-wider border border-purple-500/30">
+              Agent
+            </span>
+          )}
+        </div>
         <ChevronRight size={16} className={cn("transition-transform duration-200", isOpen ? "rotate-90" : "")} />
       </button>
       
@@ -324,12 +440,41 @@ function ModelSelector({ selected, onChange, darkMode }: { selected: string, onC
               exit={{ opacity: 0, y: 10, scale: 0.95 }}
               transition={{ duration: 0.1, ease: "easeOut" }}
               className={cn(
-                "absolute bottom-full mb-5 left-0 w-64 rounded-xl shadow-2xl z-50 p-1 backdrop-blur-2xl transform-gpu will-change-[backdrop-filter]",
+                "absolute bottom-full mb-5 left-0 w-72 rounded-xl shadow-2xl z-50 p-1 backdrop-blur-2xl transform-gpu will-change-[backdrop-filter]",
                 darkMode 
-                  ? "bg-black/70 border border-white/10 text-white" 
-                  : "bg-white/90 border border-black/10 text-gray-900"
+                  ? "bg-black/80 border border-white/10 text-white" 
+                  : "bg-white/95 border border-black/10 text-gray-900"
               )}
             >
+              <div className="px-3 py-2 mb-1 border-b border-white/10">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Sparkles size={16} className="text-purple-400" />
+                    <span className="text-xs font-bold uppercase tracking-wider opacity-60">{t.agent}</span>
+                  </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIsAgentMode(!isAgentMode);
+                    }}
+                    className={cn(
+                      "relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none",
+                      isAgentMode ? "bg-purple-600" : (darkMode ? "bg-white/10" : "bg-black/10")
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform",
+                        isAgentMode ? "translate-x-5" : "translate-x-1"
+                      )}
+                    />
+                  </button>
+                </div>
+                <p className="text-[10px] text-gray-500 mt-1 leading-tight">
+                  {isAgentMode ? "Agent mode enabled: Auto-planning & deep generation" : "Standard mode: Direct response & editing"}
+                </p>
+              </div>
+
               {models.map(m => (
                 <button
                   key={m.id}
@@ -385,8 +530,9 @@ interface ChatInputAreaProps {
   setSelectedModel: (model: string) => void;
   showCode: boolean;
   setShowCode: (show: boolean) => void;
-  isDeepGeneration: boolean;
-  setIsDeepGeneration: (val: boolean) => void;
+  isAgentMode: boolean;
+  setIsAgentMode: (val: boolean) => void;
+  lang: 'en' | 'zh';
 }
 
 const ChatInputArea = React.memo(({
@@ -400,9 +546,11 @@ const ChatInputArea = React.memo(({
   setSelectedModel,
   showCode,
   setShowCode,
-  isDeepGeneration,
-  setIsDeepGeneration
+  isAgentMode,
+  setIsAgentMode,
+  lang
 }: ChatInputAreaProps) => {
+  const t = translations[lang];
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [isDragging, setIsDragging] = useState(false);
@@ -411,7 +559,7 @@ const ChatInputArea = React.memo(({
   const processFiles = (files: File[]) => {
     if (files.length === 0) return;
 
-    files.forEach(file => {
+    files.forEach(async file => {
       const previewUrl = file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined;
       setAttachments(prev => [...prev, {
         id: Math.random().toString(36).substring(2, 15),
@@ -495,7 +643,7 @@ const ChatInputArea = React.memo(({
           >
             <div className="flex flex-col items-center gap-2 text-blue-600">
               <Plus size={48} className="animate-bounce" />
-              <span className="font-bold text-lg">Drop files to upload</span>
+              <span className="font-bold text-lg">{t.dropFiles}</span>
             </div>
           </motion.div>
         )}
@@ -517,12 +665,12 @@ const ChatInputArea = React.memo(({
           <div className="flex justify-between items-center mb-4">
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-              <span className="text-sm font-bold tracking-tight uppercase opacity-60">Expanded Editor</span>
+              <span className="text-sm font-bold tracking-tight uppercase opacity-60">{t.expandedEditor}</span>
             </div>
             <button 
               onClick={() => setIsInputExpanded(false)} 
               className="p-2 rounded-full hover:bg-gray-500/10 transition-colors"
-              title="Minimize"
+              title={t.close}
             >
               <X size={24} />
             </button>
@@ -552,34 +700,57 @@ const ChatInputArea = React.memo(({
           </div>
         )}
 
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              handleSend();
-            }
-          }}
-          placeholder="Type your instructions (e.g., 'Create a resume for...')"
-          className={cn(
-            "w-full p-4 pr-12 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all resize-y shadow-inner backdrop-blur-xl",
-            darkMode ? "bg-black/20 border-white/10 text-white placeholder:text-white/30" : "bg-black/[0.03] border-black/10 text-gray-900 placeholder:text-gray-400",
-            isInputExpanded ? "flex-1 resize-none" : "min-h-[100px]"
-          )}
-        />
-        <button
-          onClick={() => setIsInputExpanded(!isInputExpanded)}
-          className={cn(
-            "absolute top-3 right-3 p-1.5 rounded-md transition-colors opacity-40 hover:opacity-100",
-            isInputExpanded && "hidden"
-          )}
-          title="Expand input"
-        >
-          <Maximize2 size={16} />
-        </button>
-        <div className="flex items-center justify-between">
-          <div className="flex gap-2 items-center">
+        <div className={cn(
+          "relative transition-all duration-500 flex items-stretch",
+          isInputExpanded && "flex-1"
+        )}>
+          <AnimatePresence>
+            {isAgentMode && (
+              <motion.div 
+                initial={{ opacity: 0, "--reveal-angle": "0deg" } as any}
+                animate={{ opacity: 1, "--reveal-angle": "420deg" } as any}
+                exit={{ opacity: 0, "--reveal-angle": "0deg" } as any}
+                transition={{ 
+                  opacity: { duration: 0.15 },
+                  "--reveal-angle": { duration: 0.5, ease: "easeIn" }
+                }}
+                className="absolute -inset-[3px] agent-rainbow-halo pointer-events-none" 
+              />
+            )}
+          </AnimatePresence>
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+              }
+            }}
+            placeholder={t.typeInstructions}
+            className={cn(
+              "w-full p-4 pr-12 border rounded-xl text-sm focus:outline-none focus:ring-2 transition-all resize-y shadow-inner backdrop-blur-xl",
+              isAgentMode 
+                ? (darkMode ? "bg-black/80 border-white/10 focus:ring-purple-500/20" : "bg-white/40 border-black/5 focus:ring-purple-500/20") 
+                : (darkMode ? "bg-black/40 border-white/10" : "bg-white/75 border-black/10"),
+              darkMode ? "text-white placeholder:text-white/30" : "text-gray-900 placeholder:text-gray-400",
+              isInputExpanded ? "flex-1 resize-none h-full" : "min-h-[100px]",
+              !isAgentMode && "focus:ring-blue-500/20 focus:border-blue-500"
+            )}
+          />
+          <button
+            onClick={() => setIsInputExpanded(!isInputExpanded)}
+            className={cn(
+              "absolute top-3 right-3 p-1.5 rounded-md transition-colors opacity-40 hover:opacity-100",
+              isInputExpanded && "hidden"
+            )}
+            title={t.expandedEditor}
+          >
+            <Maximize2 size={16} />
+          </button>
+        </div>
+        <div className="flex items-center justify-between relative">
+          <div className="flex gap-2 items-center flex-1">
             <input 
               type="file" 
               ref={fileInputRef} 
@@ -594,7 +765,7 @@ const ChatInputArea = React.memo(({
                 "p-2 rounded-lg transition-colors flex items-center gap-1.5 text-xs font-medium",
                 darkMode ? "hover:bg-[#444] text-gray-400" : "hover:bg-gray-200 text-gray-500"
               )}
-              title="Attach File"
+              title={t.attachFile}
             >
               <Plus size={16} />
             </button>
@@ -602,37 +773,37 @@ const ChatInputArea = React.memo(({
               selected={selectedModel} 
               onChange={setSelectedModel} 
               darkMode={darkMode} 
+              isAgentMode={isAgentMode}
+              setIsAgentMode={setIsAgentMode}
+              lang={lang}
             />
-            <button 
-              onClick={() => setIsDeepGeneration(!isDeepGeneration)}
-              className={cn(
-                "p-2 rounded-lg transition-colors flex items-center gap-1.5 text-xs font-medium",
-                isDeepGeneration ? "bg-purple-100 text-purple-600" : "hover:bg-gray-100 text-gray-500"
-              )}
-              title="Toggle Deep Generation (Auto-Pilot)"
-            >
-              <div className={cn("w-2 h-2 rounded-full", isDeepGeneration ? "bg-purple-500 animate-pulse" : "bg-gray-400")} />
-              Deep Gen
-            </button>
             <button 
               onClick={() => setShowCode(!showCode)}
               className={cn(
                 "p-2 rounded-lg transition-colors flex items-center gap-1.5 text-xs font-medium",
                 showCode ? "bg-blue-100 text-blue-600" : "hover:bg-gray-100 text-gray-500"
               )}
-              title="Toggle AI Code Window"
+              title={t.showCode}
             >
               <Code size={16} />
-              {showCode ? "Hide Code" : "Show Code"}
+              {showCode ? t.hideCode : t.showCode}
             </button>
           </div>
-          <button
-            onClick={handleSend}
-            disabled={isLoading || !input.trim()}
-            className="bg-blue-600 hover:bg-blue-700 text-white p-2.5 rounded-xl disabled:opacity-40 transition-all shadow-sm hover:shadow-md active:scale-95"
-          >
-            <Send size={20} />
-          </button>
+
+          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 hidden sm:flex">
+            {/* Agent Mode button removed from here */}
+          </div>
+
+          <div className="flex gap-2 items-center justify-end flex-1">
+            {/* Mobile Agent Button removed from here */}
+            <button
+              onClick={handleSend}
+              disabled={isLoading || (!input.trim() && attachments.length === 0)}
+              className="bg-blue-600 hover:bg-blue-700 text-white p-2.5 rounded-xl disabled:opacity-40 transition-all shadow-sm hover:shadow-md active:scale-95"
+            >
+              <Send size={20} />
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -640,9 +811,16 @@ const ChatInputArea = React.memo(({
 });
 
 export default function App() {
+  const [lang, setLang] = useState<'en' | 'zh'>(() => (localStorage.getItem('lang') as 'en' | 'zh') || 'zh');
+
+  useEffect(() => {
+    localStorage.setItem('lang', lang);
+  }, [lang]);
+
+  const t = translations[lang];
+
   const [docState, setDocState] = useState<DocumentState>(INITIAL_DOC_STATE);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [showCode, setShowCode] = useState(false);
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('darkMode') !== 'false');
@@ -660,12 +838,17 @@ export default function App() {
       messages: [],
       lastJson: "",
       currentDocId: null,
-      showCode: false
+      showCode: false,
+      isAgentMode: false,
+      turnHistory: []
     }
   ]);
   const [activeSessionId, setActiveSessionId] = useState<string>("initial");
+  
+  const activeSession = sessions.find(s => s.id === activeSessionId);
+  const isCurrentSessionLoading = activeSession?.isLoading || false;
   const activeSessionIdRef = useRef(activeSessionId);
-  const deepGenCancelRef = useRef(false);
+  const agentCancelRef = useRef(false);
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
@@ -702,11 +885,12 @@ export default function App() {
     currentMessages: ChatMessage[], 
     currentLastJson: string, 
     currentDocId: string | null,
-    currentShowCode: boolean
+    currentShowCode: boolean,
+    currentIsAgentMode: boolean
   ) => {
     setSessions(prev => prev.map(s => 
       s.id === sessionId 
-        ? { ...s, docState: currentDocState, messages: currentMessages, lastJson: currentLastJson, currentDocId: currentDocId, showCode: currentShowCode } 
+        ? { ...s, docState: currentDocState, messages: currentMessages, lastJson: currentLastJson, currentDocId: currentDocId, showCode: currentShowCode, isAgentMode: currentIsAgentMode } 
         : s
     ));
   }, []);
@@ -720,13 +904,14 @@ export default function App() {
   const [isFormatPainterActive, setIsFormatPainterActive] = useState(false);
   const [isInputExpanded, setIsInputExpanded] = useState(false);
   const [activeDropdown, setActiveDropdown] = useState<'font' | 'align' | 'list' | 'color' | null>(null);
-  const [isDeepGenerationMode, setIsDeepGenerationMode] = useState(false);
-  const [deepGenState, setDeepGenState] = useState<{
+  const [isAgentMode, setIsAgentMode] = useState(false);
+  const [agentState, setAgentState] = useState<{
     isActive: boolean;
     tasks: string[];
     currentIndex: number;
     originalPrompt: string;
-  }>({ isActive: false, tasks: [], currentIndex: 0, originalPrompt: "" });
+    sessionId: string | null;
+  }>({ isActive: false, tasks: [], currentIndex: 0, originalPrompt: "", sessionId: null });
   
   const [history, setHistory] = useState({
     index: 0,
@@ -746,6 +931,25 @@ export default function App() {
     });
   }, []);
 
+  const handleUndoTurn = useCallback(() => {
+    const sessionId = activeSessionId;
+    const session = sessions.find(s => s.id === sessionId);
+    if (!session || session.turnHistory.length === 0) return;
+
+    const lastTurn = session.turnHistory[session.turnHistory.length - 1];
+    const newTurnHistory = session.turnHistory.slice(0, -1);
+
+    setDocState(JSON.parse(JSON.stringify(lastTurn.docState)));
+    setMessages([...lastTurn.messages]);
+    setSessions(prev => prev.map(s => 
+      s.id === sessionId 
+        ? { ...s, docState: lastTurn.docState, messages: lastTurn.messages, turnHistory: newTurnHistory } 
+        : s
+    ));
+    // Also reset history stack to this state
+    setHistory({ index: 0, stack: [JSON.parse(JSON.stringify(lastTurn.docState))] });
+  }, [sessions, activeSessionId]);
+
   const createNewSession = useCallback(() => {
     const newId = Math.random().toString(36).substring(2, 11);
     const newSession: Session = {
@@ -754,7 +958,9 @@ export default function App() {
       messages: [],
       lastJson: "",
       currentDocId: null,
-      showCode: false
+      showCode: false,
+      isAgentMode: false,
+      turnHistory: []
     };
     setSessions(prev => [...prev, newSession]);
     setActiveSessionId(newId);
@@ -763,6 +969,8 @@ export default function App() {
     setMessages([]);
     setLastJson("");
     setCurrentDocId(null);
+    setIsAgentMode(false);
+    setShowCode(false);
     setHistory({ index: 0, stack: [INITIAL_DOC_STATE] });
   }, []);
 
@@ -771,7 +979,7 @@ export default function App() {
     if (!s) return;
 
     setConfirmAction({
-      message: `Are you sure you want to delete "${s.docState.title}"?`,
+      message: t.confirmDelete(s.docState.title),
       action: () => {
         const newSessions = sessions.filter(sess => sess.id !== id);
         
@@ -784,7 +992,9 @@ export default function App() {
             messages: [],
             lastJson: "",
             currentDocId: null,
-            showCode: false
+            showCode: false,
+            isAgentMode: false,
+            turnHistory: []
           };
           setSessions([resetSession]);
           setActiveSessionId(resetId);
@@ -793,6 +1003,8 @@ export default function App() {
           setMessages([]);
           setLastJson("");
           setCurrentDocId(null);
+          setIsAgentMode(false);
+          setShowCode(false);
           setHistory({ index: 0, stack: [INITIAL_DOC_STATE] });
         } else {
           setSessions(newSessions);
@@ -804,6 +1016,7 @@ export default function App() {
             setMessages(next.messages);
             setLastJson(next.lastJson);
             setCurrentDocId(next.currentDocId);
+            setIsAgentMode(next.isAgentMode || false);
             setHistory({ index: 0, stack: [next.docState] });
           }
         }
@@ -880,8 +1093,10 @@ export default function App() {
 
   // Initialize AI
   useEffect(() => {
-    if (process.env.GEMINI_API_KEY) {
-      aiRef.current = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const apiKey = process.env.GEMINI_API_KEY;
+    console.log("Initializing AI with API Key:", apiKey ? "FOUND (starts with " + apiKey.substring(0, 4) + "...)" : "NOT FOUND");
+    if (apiKey) {
+      aiRef.current = new GoogleGenAI({ apiKey });
     }
   }, []);
 
@@ -973,6 +1188,7 @@ export default function App() {
         setMessages(existingSession.messages);
         setLastJson(existingSession.lastJson);
         setShowCode(existingSession.showCode);
+        setIsAgentMode(existingSession.isAgentMode);
         setCurrentDocId(existingSession.currentDocId);
         setHistory({ index: 0, stack: [existingSession.docState] });
         setShowHistory(false);
@@ -1001,7 +1217,9 @@ export default function App() {
         messages: messages,
         lastJson: "",
         currentDocId: docItem.id,
-        showCode: false
+        showCode: false,
+        isAgentMode: false,
+        turnHistory: []
       };
       
       setSessions(prev => [...prev, newSession]);
@@ -1011,6 +1229,8 @@ export default function App() {
       setMessages(messages);
       setLastJson("");
       setCurrentDocId(docItem.id);
+      setIsAgentMode(false);
+      setShowCode(false);
       setHistory({ index: 0, stack: [state] });
       setShowHistory(false);
     } catch (e) {
@@ -1136,14 +1356,65 @@ export default function App() {
 
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
 
+  const handleMainDocUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    try {
+      const parsed = await parseWordDoc(file);
+      setDocState(parsed);
+      setSessions(prev => prev.map(s => s.id === activeSessionId ? { ...s, docState: parsed } : s));
+      pushToHistory(parsed);
+      
+      const systemMsg: ChatMessage = {
+        role: "model",
+        text: `📂 **已加载 Word 文档: ${parsed.title}**\n\n您现在可以直接对该文档进行修改。请告诉我您想做什么。`,
+      };
+      setMessages(prev => [...prev, systemMsg]);
+      setSessions(prev => prev.map(s => s.id === activeSessionId ? { ...s, messages: [...s.messages, systemMsg] } : s));
+    } catch (error) {
+      console.error("Failed to parse main Word doc", error);
+    }
+    
+    // Reset input
+    e.target.value = '';
+  };
+
   const handleSendMessage = async (promptToUse: string, attachments: ChatAttachment[] = [], isRetry: boolean = false) => {
-    if ((!promptToUse.trim() && attachments.length === 0) || !aiRef.current || isLoading) return;
+    console.log("handleSendMessage called", { promptToUse, attachmentsCount: attachments.length, isRetry });
+    if ((!promptToUse.trim() && attachments.length === 0) || isCurrentSessionLoading) return;
+
+    if (!aiRef.current) {
+      console.error("AI Assistant not initialized. aiRef.current is null.");
+      const errorMessage: ChatMessage = { 
+        role: "model", 
+        text: "❌ AI Assistant is not initialized. Please check if the API key is configured correctly in the environment.",
+        isError: true 
+      };
+      setMessages(prev => [...prev, errorMessage]);
+      return;
+    }
 
     const sessionId = activeSessionId;
     const session = sessions.find(s => s.id === sessionId);
     if (!session) return;
     const sessionDocId = session.currentDocId;
-    let sessionShowCode = session.showCode;
+    let sessionShowCode = showCode;
+
+    // Save current state for undo turn
+    if (!isRetry) {
+      setSessions(prev => prev.map(s => 
+        s.id === sessionId 
+          ? { 
+              ...s, 
+              turnHistory: [
+                ...s.turnHistory, 
+                { docState: JSON.parse(JSON.stringify(s.docState)), messages: [...s.messages] }
+              ].slice(-10) 
+            } 
+          : s
+      ));
+    }
 
     // Helper to read file as base64
     const fileToBase64 = (file: File): Promise<string> => {
@@ -1166,11 +1437,41 @@ export default function App() {
       });
     };
 
-    const processFileForApi = (file: File): Promise<{data: string, mimeType: string, url?: string}> => {
+    const processFileForApi = (file: File): Promise<{data: string, mimeType: string, url?: string, extractedText?: string}> => {
       return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
           reject(new Error("File processing timed out"));
         }, 30000); // 30 second timeout for larger files
+
+        if (file.name.toLowerCase().endsWith('.docx') || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+          parseWordDoc(file).then(parsed => {
+            const text = parsed.sections.map(s => s.paragraphs.map(p => {
+              if (p.type === 'table') return '[Table]';
+              if (p.type === 'image') return '[Image]';
+              if (p.type === 'formula') return '[Formula]';
+              const para = p as DocParagraph;
+              return para.runs?.map(r => r.text).join('') || para.text || '';
+            }).join('\n')).join('\n\n');
+            
+            fileToBase64(file).then(base64 => {
+              clearTimeout(timeout);
+              resolve({ data: base64, mimeType: file.type, extractedText: text });
+            }).catch(err => {
+              clearTimeout(timeout);
+              reject(err);
+            });
+          }).catch(err => {
+            console.error("Failed to parse Word doc for API", err);
+            fileToBase64(file).then(base64 => {
+              clearTimeout(timeout);
+              resolve({ data: base64, mimeType: file.type });
+            }).catch(err2 => {
+              clearTimeout(timeout);
+              reject(err2);
+            });
+          });
+          return;
+        }
 
         fileToBase64(file).then(async base64 => {
           let uploadUrl;
@@ -1234,28 +1535,38 @@ export default function App() {
       setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, messages: currentMessages } : s));
     }
     
-    setIsLoading(true);
+    setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, isLoading: true } : s));
 
     try {
-      const currentDocState = session.docState;
+      let currentDocState = session.docState;
+      
+      // We no longer parse Word documents from attachments into docState.
+      // The main document is uploaded via the central button.
+      // Attachments are treated as reference materials.
+
       const userRequestText = promptToUse.trim() || (attachments.length > 0 ? "请处理我上传的文件并根据其内容更新文档。" : "");
       
-      if (isDeepGenerationMode && !isRetry) {
-        deepGenCancelRef.current = false;
+      if (isAgentMode) {
+        agentCancelRef.current = false;
         // --- PHASE 1: PLANNER ---
         const addModelPlaceholder = (prev: ChatMessage[]): ChatMessage[] => [...prev, { role: "model", text: "正在规划任务大纲...", steps: [], isStreaming: true }];
         if (activeSessionIdRef.current === sessionId) setMessages(addModelPlaceholder);
         setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, messages: addModelPlaceholder(s.messages) } : s));
         
-        const outlinePrompt = `You are a Planner Agent. The user wants to generate a large document or perform a complex task.
+        const outlinePrompt = `You are a Planner Agent. The user wants to generate a large document or perform a complex task based on their request, the current document state, and any attached files.
 USER REQUEST: ${userRequestText}
 
+CURRENT DOCUMENT STATE:
+${JSON.stringify(currentDocState)}
+
 Your goal is to break this request into a sequence of highly granular, manageable tasks to ensure maximum detail and avoid AI laziness.
-Guidelines:
-1. Each task should focus on a specific section, a specific set of points, or a specific range of content (e.g., "Detailed expansion of the 'Personal Experience' section", "In-depth summary of the first 10 pages of notes").
-2. Tasks must be strictly sequential and collectively cover the entire user request without gaps.
-3. For complex requests, aim for 5-12 granular tasks.
-4. If the user mentions "parts", "sections", or "pages", use those as natural boundaries for tasks.
+
+CRITICAL RULES:
+1. YOU MUST NOT OUTPUT A SINGLE TASK. You MUST break the work down into AT LEAST 3-5 tasks. If you output a single task, you have failed.
+2. If the user request contains a long list of items, sections, or points to expand, YOU MUST CREATE A SEPARATE TASK FOR EACH SECTION OR ITEM. Do not group them all into one task.
+3. Each task should focus on a specific section, a specific set of points, or a specific range of content (e.g., "Detailed expansion of the 'Personal Experience' section", "In-depth summary of the first 10 pages of notes", "Expand on items 1 and 2 from the source material").
+4. Tasks must be strictly sequential and collectively cover the entire user request without gaps.
+5. For complex requests, aim for 5-12 granular tasks.
 
 Output ONLY a valid JSON array of strings, where each string is a specific, detailed task description for the Writer Agent. Do not output markdown code blocks, just the JSON array.
 Example: ["Write a detailed Introduction and Background", "Develop the first main chapter: Market Trends", "Develop the second main chapter: Competitive Landscape", "Write the detailed Conclusion and Recommendations"]`;
@@ -1266,7 +1577,7 @@ Example: ["Write a detailed Introduction and Background", "Develop the first mai
             parts: [
               ...(currentAttachmentsWithData.flatMap(att => {
                 const parts = [];
-                if (att.data && att.type) {
+                if (att.data && att.type && !att.type.includes('wordprocessingml.document')) {
                   parts.push({
                     inlineData: {
                       data: att.data!,
@@ -1274,8 +1585,13 @@ Example: ["Write a detailed Introduction and Background", "Develop the first mai
                     }
                   });
                 }
+                if (att.extractedText) {
+                  parts.push({
+                    text: `[Reference Document Content - ${att.name}]:\n${att.extractedText}`
+                  });
+                }
                 parts.push({
-                  text: `[Uploaded Image URL: ${att.url || `attachment://${att.id}`}] (File Name: ${att.name})`
+                  text: `[Uploaded File: ${att.url || `attachment://${att.id}`}] (File Name: ${att.name})`
                 });
                 return parts;
               })),
@@ -1284,34 +1600,58 @@ Example: ["Write a detailed Introduction and Background", "Develop the first mai
           }
         ];
 
-        const outlineResponse = await aiRef.current.models.generateContent({
-          model: selectedModel,
-          contents: outlineContents as any,
-          config: {
-            responseMimeType: "application/json",
-            ...(selectedModel === "gemini-3.1-pro-preview" ? { thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH } } : {}),
+        let outlineResponse;
+        let outlineRetries = 0;
+        const maxOutlineRetries = 3;
+        while (outlineRetries < maxOutlineRetries) {
+          try {
+            outlineResponse = await aiRef.current.models.generateContent({
+              model: selectedModel,
+              contents: outlineContents as any,
+              config: {
+                responseMimeType: "application/json",
+                ...(selectedModel === "gemini-3.1-pro-preview" ? { thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH } } : {}),
+              }
+            });
+            break;
+          } catch (error: any) {
+            if (error.status === 429 && outlineRetries < maxOutlineRetries) {
+              outlineRetries++;
+              const delay = Math.pow(2, outlineRetries) * 1000;
+              await new Promise(resolve => setTimeout(resolve, delay));
+            } else {
+              console.error("Failed to generate outline:", error);
+              throw error; // Let the outer catch block handle it
+            }
           }
-        });
+        }
+        
+        if (!outlineResponse) throw new Error("Failed to generate outline");
 
         let tasks: string[] = [];
         try {
-          tasks = JSON.parse(outlineResponse.text || "[]");
+          let rawText = outlineResponse.text || "[]";
+          const match = rawText.match(/\[[\s\S]*\]/);
+          if (match) {
+            rawText = match[0];
+          }
+          tasks = JSON.parse(rawText);
           if (!Array.isArray(tasks)) tasks = [userRequestText];
         } catch (e) {
           console.error("Failed to parse outline", e);
           tasks = [userRequestText];
         }
 
-        setDeepGenState({ isActive: true, tasks, currentIndex: 0, originalPrompt: userRequestText });
+        setAgentState({ isActive: true, tasks, currentIndex: 0, originalPrompt: userRequestText, sessionId });
 
         // --- PHASE 2: WRITER LOOP ---
         let loopDocState = currentDocState;
         let finalFullText = `已自动拆分为 ${tasks.length} 个子任务：\n` + tasks.map((t, i) => `${i + 1}. ${t}`).join('\n') + '\n\n';
         
         for (let i = 0; i < tasks.length; i++) {
-          if (activeSessionIdRef.current !== sessionId || deepGenCancelRef.current) break;
+          if (agentCancelRef.current) break;
           const task = tasks[i];
-          setDeepGenState(prev => ({ ...prev, currentIndex: i }));
+          setAgentState(prev => prev.sessionId === sessionId ? { ...prev, currentIndex: i } : prev);
           
           const updateMessageText = (prev: ChatMessage[]): ChatMessage[] => {
             const newMsgs = [...prev];
@@ -1330,13 +1670,14 @@ YOUR CURRENT TASK: ${task}
 
 Please generate ONLY the content for your current task. 
 CRITICAL INSTRUCTIONS:
-1. **NO LAZINESS**: You must provide full, rich, and detailed content. Do NOT summarize if the task asks for expansion.
-2. **NO PLACEHOLDERS**: Never use "..." or "[Content continues...]" or similar. Write everything out.
-3. **CONTEXT**: Maintain perfect consistency with the existing document state.
-4. **OUTPUT FORMAT**: 
+1. **NO LAZINESS**: You must provide full, rich, and detailed content. If the task asks for expansion, you MUST add significant new details, examples, and explanations. Do NOT just copy the source material or current document state.
+2. **USE REFERENCE MATERIALS**: If the user uploaded reference materials, you MUST actively search through them to find relevant information, quotes, or examples to enrich your writing. Do not just rely on your internal knowledge.
+3. **NO PLACEHOLDERS**: Never use "..." or "[Content continues...]" or similar. Write everything out.
+4. **CONTEXT**: Maintain perfect consistency with the existing document state.
+5. **OUTPUT FORMAT**: 
    - First, provide a brief explanation of what you are doing for this task in Chinese.
    - Then, provide the JSON update in a markdown code block (e.g., \`\`\`json ... \`\`\`).
-   - Use type: "append" to add content to the end of the document, or "full" if you need to restructure.`;
+   - Use type: "append" to add content to the end of the document, or "full" if you need to restructure or modify existing content. If modifying existing content, ensure you are actually expanding/improving it, not just repeating it.`;
 
           const taskContents = [
             {
@@ -1344,7 +1685,7 @@ CRITICAL INSTRUCTIONS:
               parts: [
                 ...(currentAttachmentsWithData.flatMap(att => {
                   const parts = [];
-                  if (att.data && att.type) {
+                  if (att.data && att.type && !att.type.includes('wordprocessingml.document')) {
                     parts.push({
                       inlineData: {
                         data: att.data!,
@@ -1352,8 +1693,13 @@ CRITICAL INSTRUCTIONS:
                       }
                     });
                   }
+                  if (att.extractedText) {
+                    parts.push({
+                      text: `[Reference Document Content - ${att.name}]:\n${att.extractedText}`
+                    });
+                  }
                   parts.push({
-                    text: `[Uploaded Image URL: ${att.url || `attachment://${att.id}`}] (File Name: ${att.name})`
+                    text: `[Uploaded File: ${att.url || `attachment://${att.id}`}] (File Name: ${att.name})`
                   });
                   return parts;
                 })),
@@ -1362,18 +1708,36 @@ CRITICAL INSTRUCTIONS:
             }
           ];
 
-          const taskResponseStream = await aiRef.current.models.generateContentStream({
-            model: selectedModel,
-            contents: taskContents as any,
-            config: {
-              systemInstruction: SYSTEM_INSTRUCTION,
-              ...(selectedModel === "gemini-3.1-pro-preview" ? { thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH } } : {}),
+          let taskResponseStream;
+          let retries = 0;
+          const maxRetries = 3;
+          while (retries < maxRetries) {
+            try {
+              taskResponseStream = await aiRef.current.models.generateContentStream({
+                model: selectedModel,
+                contents: taskContents as any,
+                config: {
+                  systemInstruction: SYSTEM_INSTRUCTION,
+                  ...(selectedModel === "gemini-3.1-pro-preview" ? { thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH } } : {}),
+                }
+              });
+              break;
+            } catch (error: any) {
+              if (error.status === 429 && retries < maxRetries) {
+                retries++;
+                const delay = Math.pow(2, retries) * 1000;
+                await new Promise(resolve => setTimeout(resolve, delay));
+              } else {
+                throw error;
+              }
             }
-          });
+          }
+          
+          if (!taskResponseStream) throw new Error("Failed to generate content stream");
 
           let taskText = "";
           for await (const chunk of taskResponseStream) {
-            if (activeSessionIdRef.current !== sessionId || deepGenCancelRef.current) break;
+            if (agentCancelRef.current) break;
             taskText += chunk.text;
           }
 
@@ -1412,14 +1776,14 @@ CRITICAL INSTRUCTIONS:
           setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, messages: finishTaskMessage(s.messages) } : s));
         }
         
-        setDeepGenState(prev => ({ ...prev, isActive: false }));
+        setAgentState(prev => prev.sessionId === sessionId ? { ...prev, isActive: false } : prev);
         
         const finalMessagesUpdater = (prev: ChatMessage[]): ChatMessage[] => {
           const newMessages = [...prev];
           if (newMessages.length > 0) {
             newMessages[newMessages.length - 1] = { 
               role: "model", 
-              text: finalFullText + (deepGenCancelRef.current ? "\n\n⚠️ **深度生成已取消。**" : "\n\n🎉 **所有任务已完成！**"),
+              text: finalFullText + (agentCancelRef.current ? "\n\n⚠️ **深度生成已取消。**" : "\n\n🎉 **所有任务已完成！**"),
               isStreaming: false
             };
           }
@@ -1431,7 +1795,7 @@ CRITICAL INSTRUCTIONS:
         }
         
         const finalMessages = finalMessagesUpdater(addModelPlaceholder(currentMessages));
-        syncSession(sessionId, loopDocState, finalMessages, "", sessionDocId, sessionShowCode);
+        syncSession(sessionId, loopDocState, finalMessages, "", sessionDocId, sessionShowCode, isAgentMode);
         saveCurrentDoc(loopDocState, finalMessages, sessionDocId);
 
       } else {
@@ -1458,7 +1822,7 @@ CRITICAL INSTRUCTIONS:
             parts: [
               ...(currentAttachmentsWithData.flatMap(att => {
                 const parts = [];
-                if (att.data && att.type) {
+                if (att.data && att.type && !att.type.includes('wordprocessingml.document')) {
                   parts.push({
                     inlineData: {
                       data: att.data!,
@@ -1466,8 +1830,13 @@ CRITICAL INSTRUCTIONS:
                     }
                   });
                 }
+                if (att.extractedText) {
+                  parts.push({
+                    text: `[Reference Document Content - ${att.name}]:\n${att.extractedText}`
+                  });
+                }
                 parts.push({
-                  text: `[Uploaded Image URL: ${att.url || `attachment://${att.id}`}] (File Name: ${att.name})`
+                  text: `[Uploaded File: ${att.url || `attachment://${att.id}`}] (File Name: ${att.name})`
                 });
                 return parts;
               })),
@@ -1642,25 +2011,27 @@ CRITICAL INSTRUCTIONS:
       }
       
       const finalMessages = finalMessagesUpdater(addModelPlaceholder(currentMessages));
-      syncSession(sessionId, finalDocState, finalMessages, finalJson, sessionDocId, sessionShowCode);
+      syncSession(sessionId, finalDocState, finalMessages, finalJson, sessionDocId, sessionShowCode, isAgentMode);
       saveCurrentDoc(finalDocState, finalMessages, sessionDocId);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("AI Error:", error);
       const errorUpdater = (prev: ChatMessage[]): ChatMessage[] => {
         const newMessages = [...prev];
+        const errorMsg = error instanceof Error ? error.message : (typeof error === 'object' ? JSON.stringify(error) : String(error));
+        const displayMsg = `Sorry, I encountered an error:\n\`\`\`\n${errorMsg}\n\`\`\`\n\nPlease try again.`;
         if (newMessages.length > 0) {
           const lastMsg = newMessages[newMessages.length - 1];
           if (lastMsg.role === "user") {
             newMessages.push({
               role: "model",
-              text: "Sorry, I encountered an error. Please try again.",
+              text: displayMsg,
               isStreaming: false
             });
           } else {
             newMessages[newMessages.length - 1] = { 
               role: "model", 
-              text: "Sorry, I encountered an error. Please try again.",
+              text: displayMsg,
               isStreaming: false
             };
           }
@@ -1672,7 +2043,7 @@ CRITICAL INSTRUCTIONS:
       }
       setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, messages: errorUpdater(s.messages) } : s));
     } finally {
-      setIsLoading(false);
+      setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, isLoading: false } : s));
     }
   };
 
@@ -2084,11 +2455,14 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                               >
                                 {(cell.content || []).map((cp, cpIdx) => (
                                   <div key={cpIdx} className={cn(
-                                    "text-sm",
+                                    !cp.fontSize && "text-sm",
+                                    cp.isBold && "font-bold",
+                                    cp.isItalic && "italic",
                                     cp.alignment === 'center' && "text-center",
                                     cp.alignment === 'right' && "text-right",
                                     cp.alignment === 'justify' && "text-justify"
-                                  )}>
+                                  )}
+                                  style={{ fontSize: cp.fontSize, color: cp.color, fontFamily: cp.fontFamily }}>
                                     {cp.runs ? (
                                       (cp.runs || []).map((run, crIdx) => (
                                         <MathText
@@ -2103,7 +2477,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                                             run.subscript && "text-[0.75em] align-sub",
                                             run.superscript && "text-[0.75em] align-super"
                                           )}
-                                          style={{ color: run.color, fontFamily: run.fontFamily }}
+                                          style={{ color: run.color, fontFamily: run.fontFamily, fontSize: run.fontSize }}
                                           isFocused={focusedBlock?.s === sIdx && focusedBlock?.p === pIdx}
                                         />
                                       ))
@@ -2117,7 +2491,6 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                                           cp.subscript && "text-[0.75em] align-sub",
                                           cp.superscript && "text-[0.75em] align-super"
                                         )}
-                                        style={{ color: cp.color, fontFamily: cp.fontFamily, fontWeight: cp.isBold ? 'bold' : 'normal', fontStyle: cp.isItalic ? 'italic' : 'normal' }}
                                         isFocused={focusedBlock?.s === sIdx && focusedBlock?.p === pIdx}
                                       />
                                     )}
@@ -2194,7 +2567,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                 }[level as 1|2|3|4|5|6];
 
                 const className = cn(headingSize, alignmentClass, focusClass, "outline-none p-1 transition-all");
-                const style = { color: para.color, fontFamily: para.fontFamily };
+                const style = { color: para.color, fontFamily: para.fontFamily, fontSize: para.fontSize };
 
                 const renderHeadingContent = () => {
                   if (para.runs) {
@@ -2202,7 +2575,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                       <MathText
                         key={i}
                         text={r.text}
-                        style={{ color: r.color, fontFamily: r.fontFamily }}
+                        style={{ color: r.color, fontFamily: r.fontFamily, fontSize: r.fontSize }}
                         className={cn(
                           r.isBold && "font-bold",
                           r.isItalic && "italic",
@@ -2260,12 +2633,13 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                   )}
                   <p 
                     className={cn(
-                      "text-[11pt] leading-[1.5] flex-1 outline-none",
+                      "leading-[1.5] flex-1 outline-none",
+                      !para.fontSize && "text-[11pt]",
                       para.isBold && "font-bold",
                       para.isItalic && "italic",
                       !para.color && "text-gray-900"
                     )}
-                    style={{ color: para.color, fontFamily: para.fontFamily }}
+                    style={{ color: para.color, fontFamily: para.fontFamily, fontSize: para.fontSize }}
                   >
                     {para.runs ? (
                       para.runs.map((run, rIdx) => (
@@ -2281,7 +2655,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                             run.subscript && "text-[0.75em] align-sub",
                             run.superscript && "text-[0.75em] align-super"
                           )}
-                          style={{ color: run.color, fontFamily: run.fontFamily }}
+                          style={{ color: run.color, fontFamily: run.fontFamily, fontSize: run.fontSize }}
                           isFocused={isFocused}
                         />
                       ))
@@ -2408,10 +2782,29 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
           animate={{ opacity: 1 }}
           transition={{ duration: 1 }}
           className={cn(
-            "flex flex-col h-screen overflow-hidden transition-colors duration-500 relative",
+            "flex flex-col h-screen overflow-hidden transition-colors duration-700 relative",
             darkMode ? "text-[#E0E0E0] dark" : "text-[#202124]"
           )}
         >
+          {/* Global Agent Mode Background & Light Effect */}
+          <AnimatePresence>
+            {isAgentMode && (
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.4, ease: "easeInOut" }}
+                className={cn(
+                  "absolute inset-0 pointer-events-none z-0 overflow-hidden",
+                  darkMode ? "agent-mode-bg-dark" : "agent-mode-bg-light"
+                )}
+              >
+                <div className="absolute top-[-15%] left-[-15%] w-[60%] h-[60%] bg-pink-400/15 blur-[140px] rounded-full" />
+                <div className="absolute bottom-[-15%] right-[-15%] w-[60%] h-[60%] bg-cyan-400/15 blur-[140px] rounded-full" />
+                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[70%] h-[70%] bg-purple-500/5 blur-[180px] rounded-full" />
+              </motion.div>
+            )}
+          </AnimatePresence>
       {/* Background Layers for Smooth Transition */}
       <div className={cn(
         "absolute inset-0 z-[-2] transition-opacity duration-700 bg-gradient-to-br from-[#0f172a] via-[#1e1b4b] to-[#0f172a] pointer-events-none",
@@ -2423,7 +2816,11 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
       )} />
 
       {/* Atmospheric Background */}
-      <div className="absolute inset-0 z-[-1] overflow-hidden pointer-events-none">
+      <div className={cn(
+        "absolute inset-0 z-[-10] overflow-hidden pointer-events-none transition-opacity duration-700",
+        isMobile && "opacity-40",
+        isAgentMode && "opacity-0"
+      )}>
         <div className={cn(
           "absolute -top-[10%] -left-[5%] w-[60%] h-[60%] rounded-full filter blur-[120px] animate-blob",
           darkMode ? "bg-indigo-600/40 opacity-70 mix-blend-screen" : "bg-blue-300/60 opacity-90 mix-blend-soft-light"
@@ -2444,11 +2841,16 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
       </div>
 
       {/* Global Header */}
-      <header className="shrink-0 z-50 transition-colors duration-500">
-        {/* Top Bar - Solid Background */}
+      <header className={cn(
+        "shrink-0 z-50 transition-colors duration-500 relative border-b backdrop-blur-md",
+        darkMode ? "border-white/10 bg-[#1A1A1A]/80" : "border-black/5 bg-white/80",
+        isAgentMode && (darkMode ? "bg-zinc-950/40" : "bg-white/40")
+      )}>
+        {/* Top Bar - Transparent Background */}
         <div className={cn(
-          "flex items-center justify-between px-4 py-2 border-b transition-colors duration-500",
-          darkMode ? "bg-[#1A1A1A] border-white/10" : "bg-white border-black/5 shadow-sm"
+          "flex items-center justify-between px-4 py-2 border-b transition-colors duration-500 backdrop-blur-sm",
+          darkMode ? "bg-transparent border-white/10" : "bg-transparent border-black/5",
+          isAgentMode && "shadow-none"
         )}>
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
@@ -2458,6 +2860,17 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
           </div>
           
           <div className="flex items-center gap-2">
+            <button 
+              onClick={() => setLang(lang === 'en' ? 'zh' : 'en')}
+              className={cn(
+                "p-2 rounded-lg transition-colors flex items-center gap-1 text-xs font-bold",
+                darkMode ? "hover:bg-[#333] text-blue-400" : "hover:bg-gray-100 text-blue-600"
+              )}
+              title={t.switchLang}
+            >
+              <Languages size={18} />
+              {lang === 'en' ? "EN" : "ZH"}
+            </button>
             <button 
               onClick={() => setDarkMode(!darkMode)}
               className={cn(
@@ -2479,7 +2892,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                     "p-1.5 rounded-md transition-colors mr-1",
                     showHistory ? "bg-blue-100 text-blue-600" : "hover:bg-gray-100 dark:hover:bg-[#333] text-gray-500"
                   )}
-                  title="My Documents"
+                  title={t.myDocs}
                 >
                   <History size={16} />
                 </button>
@@ -2493,6 +2906,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                 <button 
                   onClick={handleLogout}
                   className="p-1.5 hover:bg-red-100 hover:text-red-600 rounded-md transition-colors text-gray-400"
+                  title={t.logout}
                 >
                   <LogOut size={16} />
                 </button>
@@ -2503,7 +2917,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                 className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-all"
               >
                 <LogIn size={16} />
-                <span>Login</span>
+                <span>{t.loginWithGoogle}</span>
               </button>
             )}
           </div>
@@ -2511,8 +2925,9 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
 
         {/* Session Tabs - Global (Moved above mobile switcher) */}
         <div className={cn(
-          "flex items-center gap-1 px-4 py-2 overflow-x-auto custom-scrollbar shrink-0 z-30 transition-all duration-500 backdrop-blur-2xl shadow-lg transform-gpu will-change-[backdrop-filter]",
-          darkMode ? "bg-black/30 text-white" : "bg-black/[0.18] text-gray-900"
+          "flex items-center gap-1 px-4 py-2 overflow-x-auto custom-scrollbar shrink-0 z-30 transition-all duration-500 backdrop-blur-2xl",
+          darkMode ? "bg-zinc-900/80 text-white shadow-lg" : "bg-white/90 text-gray-900 shadow-sm",
+          isAgentMode && "shadow-none"
         )}>
           {sessions.map(s => (
                 <div 
@@ -2521,7 +2936,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                     "group flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer border shrink-0",
                     activeSessionId === s.id 
                       ? (darkMode ? "bg-blue-600 text-white border-blue-500 shadow-md" : "bg-blue-600 text-white border-blue-500 shadow-md")
-                      : (darkMode ? "bg-white/5 border-white/10 text-gray-400 hover:bg-white/10" : "bg-black/[0.05] border-black/5 text-gray-600 hover:bg-black/[0.08]")
+                      : (darkMode ? "bg-white/5 border-white/10 text-gray-400 hover:bg-white/10" : "bg-white border-zinc-200 text-gray-600 hover:bg-zinc-50")
                   )}
                   onClick={() => {
                     const session = sessions.find(sess => sess.id === s.id);
@@ -2532,6 +2947,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                       setMessages(session.messages);
                       setLastJson(session.lastJson);
                       setShowCode(session.showCode);
+                      setIsAgentMode(session.isAgentMode);
                       setCurrentDocId(session.currentDocId);
                     }
                   }}
@@ -2549,7 +2965,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                         "p-1.5 rounded transition-colors flex items-center justify-center",
                         activeSessionId === s.id ? "hover:bg-white/20 text-white" : "hover:bg-black/10 text-gray-500"
                       )}
-                      title="Download"
+                      title={t.export}
                     >
                       <Download size={16} />
                     </button>
@@ -2563,7 +2979,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                     "p-1.5 rounded transition-colors flex items-center justify-center",
                     activeSessionId === s.id ? "hover:bg-white/20 text-white" : "hover:bg-black/10 text-gray-500"
                   )}
-                  title="Delete"
+                  title={t.delete}
                 >
                   <X size={16} />
                 </button>
@@ -2576,7 +2992,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
               "p-2 rounded-lg transition-colors shrink-0 ml-2",
               darkMode ? "hover:bg-white/10 text-gray-400" : "hover:bg-gray-100 text-gray-500"
             )}
-            title="New Document"
+            title={t.newDocument}
           >
             <Plus size={18} />
           </button>
@@ -2584,8 +3000,9 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
 
         {/* Tab Switcher */}
         <div className={cn(
-          "flex px-4 md:hidden backdrop-blur-2xl transition-all duration-500 shadow-md relative z-20 transform-gpu will-change-[backdrop-filter]",
-          darkMode ? "bg-black/5" : "bg-black/[0.03]"
+          "flex px-4 md:hidden backdrop-blur-2xl transition-all duration-500 relative z-20",
+          darkMode ? "bg-zinc-900/60 shadow-md" : "bg-white/80 shadow-sm",
+          isAgentMode && "shadow-none"
         )}>
           <button 
             onClick={() => setActiveTab("chat")}
@@ -2596,7 +3013,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                 : "border-transparent opacity-60 hover:opacity-100"
             )}
           >
-            Chat
+            {t.chat}
           </button>
           <button 
             onClick={() => setActiveTab("preview")}
@@ -2607,7 +3024,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                 : "border-transparent opacity-60 hover:opacity-100"
             )}
           >
-            Preview
+            {t.preview}
           </button>
         </div>
       </header>
@@ -2640,7 +3057,8 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
             "absolute top-0 left-1/2 -translate-x-1/2 w-[160%] h-[100%] pointer-events-none z-0 opacity-60",
             darkMode 
               ? "bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.15)_0%,transparent_70%)]" 
-              : "bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.08)_0%,transparent_70%)]"
+              : "bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.08)_0%,transparent_70%)]",
+            isMobile && activeTab !== "chat" && "hidden"
           )} />
 
         <div className={cn(
@@ -2656,18 +3074,18 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                 className="p-4 space-y-3"
               >
                 <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-sm font-bold uppercase tracking-wider opacity-60">Saved Documents</h2>
-                  <button onClick={() => setShowHistory(false)} className="text-xs text-blue-600 font-medium">Back to Chat</button>
+                  <h2 className="text-sm font-bold uppercase tracking-wider opacity-60">{t.savedDocs}</h2>
+                  <button onClick={() => setShowHistory(false)} className="text-xs text-blue-600 font-medium">{t.backToChat}</button>
                 </div>
                 {savedDocs.length === 0 ? (
-                  <p className="text-center text-sm opacity-40 py-8">No saved documents yet.</p>
+                  <p className="text-center text-sm opacity-40 py-8">{t.noSavedDocs}</p>
                 ) : (
                   savedDocs.map((d) => (
                     <div 
                       key={d.id}
                       className={cn(
                         "group p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between backdrop-blur-2xl transform-gpu will-change-[backdrop-filter]",
-                        darkMode ? "bg-black/30 border-white/10 hover:border-blue-500" : "bg-black/[0.18] border-black/20 hover:border-blue-400 shadow-xl"
+                        darkMode ? "bg-black/40 border-white/10 hover:border-blue-500" : "bg-white/75 border-black/10 hover:border-blue-400 shadow-sm"
                       )}
                       onClick={() => loadDoc(d)}
                     >
@@ -2691,11 +3109,79 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
             ) : (
               <div className="p-4 space-y-4">
                 {messages.length === 0 && (
-                  <div className="flex flex-col items-center justify-center h-full text-center space-y-4 opacity-60 px-8 py-20">
-                    <MessageSquare size={48} className="text-blue-500" />
-                    <p className="text-sm">
-                      Hello! I'm your AI Word Assistant. Tell me what kind of document you'd like to create today.
+                  <div className="flex flex-col items-center justify-center h-full text-center space-y-4 px-8 py-10">
+                    <div className="w-14 h-14 bg-blue-100 dark:bg-blue-900/50 rounded-full flex items-center justify-center mb-2 shadow-lg">
+                      <FileText size={28} className="text-blue-600 dark:text-blue-400" />
+                    </div>
+                    <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100">
+                      {lang === 'zh' ? '开始修改您的文档' : 'Start Editing Your Document'}
+                    </h2>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 max-w-md">
+                      {lang === 'zh' ? '上传需要修改的 Word 文档，或者直接在下方输入指令开始。' : 'Upload a Word document to modify, or type instructions below to start.'}
                     </p>
+                    
+                    <div className="flex flex-col items-center gap-4 mt-4">
+                      {/* Central Upload Button */}
+                      <label className="relative group cursor-pointer">
+                        <input 
+                          type="file" 
+                          className="hidden" 
+                          accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                          onChange={handleMainDocUpload}
+                        />
+                        <div className="absolute -inset-1 bg-gradient-to-r from-blue-600 to-purple-600 rounded-xl blur opacity-25 group-hover:opacity-75 transition duration-1000 group-hover:duration-200"></div>
+                        <div className={cn(
+                          "relative px-6 py-3 ring-1 ring-gray-900/5 rounded-xl leading-none flex items-center gap-3 transition-all backdrop-blur-xl",
+                          darkMode ? "bg-black/40 border-white/10" : "bg-white/60 border-black/10"
+                        )}>
+                          <Upload className="text-blue-600 dark:text-blue-400" size={20} />
+                          <span className="text-base font-semibold text-gray-800 dark:text-gray-100">
+                            {lang === 'zh' ? '上传 Word 文档' : 'Upload Word Document'}
+                          </span>
+                        </div>
+                      </label>
+
+                      {/* Cool Agent Mode Toggle - Redesigned */}
+                      <div className={cn(
+                        "relative flex items-center p-1 rounded-full border shadow-inner w-64 h-12 overflow-hidden transition-all backdrop-blur-xl",
+                        darkMode ? "bg-black/20 border-white/10" : "bg-white/40 border-black/10"
+                      )}>
+                        {/* Sliding Background */}
+                        <motion.div 
+                          className="absolute top-1 bottom-1 w-[calc(50%-4px)] rounded-full shadow-lg z-0"
+                          initial={false}
+                          animate={{ 
+                            x: isAgentMode ? "100%" : "0%",
+                            background: isAgentMode 
+                              ? "linear-gradient(to right, #8b5cf6, #d946ef)" 
+                              : "linear-gradient(to right, #3b82f6, #2563eb)"
+                          }}
+                          transition={{ type: "spring", stiffness: 400, damping: 35 }}
+                          style={{ left: "4px" }}
+                        />
+                        
+                        <button
+                          onClick={() => setIsAgentMode(false)}
+                          className={cn(
+                            "relative z-10 flex-1 h-full flex items-center justify-center text-xs font-bold transition-colors duration-200",
+                            !isAgentMode ? "text-white" : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                          )}
+                        >
+                          {lang === 'zh' ? '普通模式' : 'NORMAL MODE'}
+                        </button>
+                        
+                        <button
+                          onClick={() => setIsAgentMode(true)}
+                          className={cn(
+                            "relative z-10 flex-1 h-full flex items-center justify-center text-xs font-bold transition-colors duration-200 gap-1.5",
+                            isAgentMode ? "text-white" : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                          )}
+                        >
+                          <Sparkles size={14} className={cn(isAgentMode ? "animate-pulse" : "")} />
+                          {lang === 'zh' ? 'AGENT 模式' : 'AGENT MODE'}
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 )}
                 
@@ -2714,7 +3200,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                         "group relative max-w-[90%] p-3 rounded-2xl text-sm leading-relaxed shadow-xl border backdrop-blur-2xl transform-gpu will-change-[backdrop-filter]",
                         msg.role === "user" 
                           ? "bg-blue-600/70 text-white rounded-tr-none border-blue-500/50" 
-                          : cn("rounded-tl-none", darkMode ? "bg-black/30 border-white/10 text-white" : "bg-black/[0.18] border-black/20 text-gray-900")
+                          : cn("rounded-tl-none", darkMode ? "bg-black/40 border-white/10 text-white" : "bg-white/85 border-zinc-200 text-gray-900")
                       )}
                     >
                       {msg.steps && msg.steps.length > 0 && (
@@ -2772,10 +3258,10 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                                           navigator.clipboard.writeText(String(children).replace(/\n$/, ""));
                                         }}
                                         className="hover:text-gray-900 dark:hover:text-white transition-colors flex items-center gap-1"
-                                        title="Copy code"
+                                        title={t.copy}
                                       >
                                         <Copy size={14} />
-                                        <span className="text-[10px] uppercase tracking-wider">Copy</span>
+                                        <span className="text-[10px] uppercase tracking-wider">{t.copy}</span>
                                       </button>
                                     </div>
                                     <div className="overflow-x-auto custom-scrollbar">
@@ -2824,26 +3310,42 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                         {msg.role === "user" && <span>Copy</span>}
                       </button>
                       {msg.role === "model" && (
-                        <button
-                          onClick={() => handleRetry(i)}
-                          disabled={isLoading}
-                          className={cn(
-                            "p-1.5 rounded flex items-center gap-1 text-xs transition-colors",
-                            darkMode ? "hover:bg-[#444] text-gray-400" : "hover:bg-gray-200 text-gray-500"
+                        <>
+                          <button
+                            onClick={() => handleRetry(i)}
+                            disabled={isCurrentSessionLoading}
+                            className={cn(
+                              "p-1.5 rounded flex items-center gap-1 text-xs transition-colors",
+                              darkMode ? "hover:bg-[#444] text-gray-400" : "hover:bg-gray-200 text-gray-500"
+                            )}
+                            title="Regenerate response"
+                          >
+                            <RotateCcw size={12} />
+                            <span>Regenerate</span>
+                          </button>
+                          {i === messages.length - 1 && (
+                            <button
+                              onClick={handleUndoTurn}
+                              disabled={isCurrentSessionLoading}
+                              className={cn(
+                                "p-1.5 rounded flex items-center gap-1 text-xs transition-colors",
+                                darkMode ? "hover:bg-[#444] text-gray-400" : "hover:bg-gray-200 text-gray-500"
+                              )}
+                              title="Undo Turn"
+                            >
+                              <RotateCcw size={12} className="scale-x-[-1]" />
+                              <span>Undo</span>
+                            </button>
                           )}
-                          title="Regenerate response"
-                        >
-                          <RotateCcw size={12} className={isLoading ? "animate-spin" : ""} />
-                          <span>Regenerate</span>
-                        </button>
+                        </>
                       )}
                     </div>
                   </motion.div>
                 ))}
-                {isLoading && (
+                {isCurrentSessionLoading && (
                   <div className="flex items-center gap-2 text-gray-400 text-xs animate-pulse">
                     <Loader2 size={14} className="animate-spin" />
-                    AI is drafting...
+                    {t.aiDrafting}
                   </div>
                 )}
                 <div ref={chatEndRef} />
@@ -2852,46 +3354,47 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
           </AnimatePresence>
         </div>
 
-        {/* Deep Generation Progress */}
-        {deepGenState.isActive && (
+        {/* Agent Progress */}
+        {agentState.isActive && agentState.sessionId === activeSessionId && (
           <div className="px-4 pb-2">
             <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-3">
               <div className="flex justify-between items-center mb-2">
                 <span className="text-sm font-medium text-blue-800 dark:text-blue-300">
-                  深度生成中 ({deepGenState.currentIndex + 1}/{Math.max(1, deepGenState.tasks.length)})
+                  {t.agent} ({agentState.currentIndex + 1}/{Math.max(1, agentState.tasks.length)})
                 </span>
                 <div className="flex items-center gap-3">
                   <span className="text-xs text-blue-600 dark:text-blue-400">
-                    {Math.round(((deepGenState.currentIndex) / Math.max(1, deepGenState.tasks.length)) * 100)}%
+                    {Math.round(((agentState.currentIndex) / Math.max(1, agentState.tasks.length)) * 100)}%
                   </span>
                   <button 
                     onClick={() => {
-                      deepGenCancelRef.current = true;
-                      setDeepGenState(prev => ({ ...prev, isActive: false }));
+                      agentCancelRef.current = true;
+                      setAgentState(prev => prev.sessionId === activeSessionId ? { ...prev, isActive: false } : prev);
                     }}
                     className="text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
                   >
-                    取消
+                    {t.cancel}
                   </button>
                 </div>
               </div>
               <div className="w-full bg-blue-200 dark:bg-blue-800 rounded-full h-2">
                 <div 
                   className="bg-blue-600 dark:bg-blue-500 h-2 rounded-full transition-all duration-500" 
-                  style={{ width: `${((deepGenState.currentIndex) / Math.max(1, deepGenState.tasks.length)) * 100}%` }}
+                  style={{ width: `${((agentState.currentIndex) / Math.max(1, agentState.tasks.length)) * 100}%` }}
                 ></div>
               </div>
               <div className="mt-2 text-xs text-blue-700 dark:text-blue-400 truncate">
-                当前任务: {deepGenState.tasks[deepGenState.currentIndex] || "规划中..."}
+                {t.task}: {agentState.tasks[agentState.currentIndex] || t.planningTasks}
               </div>
             </div>
           </div>
         )}
 
         {/* Larger Input Area */}
-        <ChatInputArea
+        <ChatInputArea 
+          key={activeSessionId}
           onSendMessage={handleSendMessage}
-          isLoading={isLoading}
+          isLoading={isCurrentSessionLoading}
           isInputExpanded={isInputExpanded}
           setIsInputExpanded={setIsInputExpanded}
           darkMode={darkMode}
@@ -2900,8 +3403,9 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
           setSelectedModel={setSelectedModel}
           showCode={showCode}
           setShowCode={setShowCode}
-          isDeepGeneration={isDeepGenerationMode}
-          setIsDeepGeneration={setIsDeepGenerationMode}
+          isAgentMode={isAgentMode}
+          setIsAgentMode={setIsAgentMode}
+          lang={lang}
         />
       </div>
     </motion.div>
@@ -2980,7 +3484,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                         "p-1 rounded transition-colors",
                         history.index === 0 ? "opacity-30 cursor-not-allowed" : "hover:bg-gray-100 dark:hover:bg-[#333]"
                       )}
-                      title="Undo"
+                      title={t.undo}
                     >
                       <Undo size={15} />
                     </button>
@@ -2991,7 +3495,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                         "p-1 rounded transition-colors",
                         history.index === history.stack.length - 1 ? "opacity-30 cursor-not-allowed" : "hover:bg-gray-100 dark:hover:bg-[#333]"
                       )}
-                      title="Redo"
+                      title={t.redo}
                     >
                       <Redo size={15} />
                     </button>
@@ -3336,7 +3840,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
               )}>
                 <div className="flex items-center gap-2 text-blue-600">
                   <Code size={18} />
-                  <span className="font-semibold text-sm">AI Generated Structure</span>
+                  <span className="font-semibold text-sm">{t.aiStructure}</span>
                 </div>
                 <button 
                   onClick={() => setShowCode(false)} 

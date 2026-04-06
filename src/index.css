@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
+@custom-variant dark (&:where(.dark, .dark *));
 @import "katex/dist/katex.min.css";
 
 :root {
@@ -29,4 +30,80 @@ body {
 
 .formula-editor {
   @apply mt-4 p-4 bg-zinc-900 text-indigo-300 font-mono text-sm rounded-lg border border-zinc-700 w-full focus:ring-2 focus:ring-indigo-500 focus:outline-none;
+}
+
+@property --reveal-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes rotate-halo {
+  0% { transform: translate(-50%, -50%) rotate(0deg); }
+  100% { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+.agent-rainbow-halo {
+  position: absolute;
+  z-index: -1;
+  border-radius: 16px;
+  overflow: hidden;
+  /* Fix for WebKit overflow:hidden bug with border-radius and filters */
+  transform: translateZ(0);
+  isolation: isolate;
+  /* Combined mask: radial hack for Safari + conic for reveal animation with soft edge */
+  /* We use a wider transition (60deg) to make the feathering very obvious */
+  mask-image: conic-gradient(from 0deg at 50% 50%, black 0deg, black calc(var(--reveal-angle, 0deg) - 60deg), transparent var(--reveal-angle, 0deg));
+  -webkit-mask-image: conic-gradient(from 0deg at 50% 50%, black 0deg, black calc(var(--reveal-angle, 0deg) - 60deg), transparent var(--reveal-angle, 0deg));
+}
+
+.agent-rainbow-halo::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 200vmax;
+  height: 200vmax;
+  z-index: -2;
+  background: conic-gradient(
+    from 0deg,
+    #4285f4,
+    #9b51e0,
+    #e91e63,
+    #fbbc05,
+    #34a853,
+    #4285f4
+  );
+  animation: rotate-halo 15s linear infinite;
+  transform: translate(-50%, -50%);
+  filter: blur(10px);
+  will-change: transform;
+}
+
+.agent-rainbow-halo::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  z-index: -1;
+  border-radius: 13px;
+  background-color: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(16px);
+}
+
+.dark .agent-rainbow-halo::after {
+  background-color: rgba(20, 20, 20, 0.45);
+}
+
+.agent-mode-bg-light {
+  background: 
+    radial-gradient(at 0% 0%, rgba(255, 210, 230, 0.5) 0%, transparent 70%),
+    radial-gradient(at 100% 100%, rgba(210, 250, 255, 0.5) 0%, transparent 70%),
+    #f8f5ff;
+}
+
+.agent-mode-bg-dark {
+  background: 
+    radial-gradient(at 0% 0%, rgba(70, 20, 50, 0.5) 0%, transparent 70%),
+    radial-gradient(at 100% 100%, rgba(10, 40, 60, 0.5) 0%, transparent 70%),
+    #0f071a;
 }

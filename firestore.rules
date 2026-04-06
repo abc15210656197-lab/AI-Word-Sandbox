@@ -33,21 +33,26 @@ service cloud.firestore {
       return data.keys().hasAll(['uid', 'email']) &&
              data.uid == request.auth.uid &&
              isValidEmail(data.email) &&
-             (data.get('displayName', '') is string) &&
+             (data.get('displayName', '') == null || data.get('displayName', '') is string) &&
+             (data.get('photoURL', '') == null || data.get('photoURL', '') is string) &&
              (data.get('theme', 'light') in ['light', 'dark']);
     }
 
     function isValidLoginHistory(data) {
       return data.keys().hasAll(['uid', 'timestamp']) &&
              data.uid == request.auth.uid &&
-             data.timestamp is string;
+             data.timestamp is string &&
+             (data.get('userAgent', '') is string) &&
+             (data.get('ip', '') is string);
     }
 
     function isValidDocument(data) {
       return data.keys().hasAll(['uid', 'title', 'content']) &&
              data.uid == request.auth.uid &&
              data.title is string && data.title.size() > 0 && data.title.size() < 255 &&
-             data.content is string && data.content.size() < 1000000;
+             data.content is string && data.content.size() < 2000000 &&
+             (data.get('updatedAt', '') is string) &&
+             (data.get('messages', '') == null || data.get('messages', '') is string);
     }
 
     function isAdmin() {
