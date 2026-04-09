@@ -49,10 +49,12 @@ import {
   Redo,
   Languages,
   Upload,
-  Sparkles
+  Sparkles,
+  Eye
 } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkMath from "remark-math";
+import remarkGfm from "remark-gfm";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -627,11 +629,37 @@ const ChatInputArea = React.memo(({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       className={cn(
-        "p-4 transition-all relative z-30 shadow-[0_-15px_40px_-15px_rgba(0,0,0,0.5)]",
+        "p-4 transition-all relative z-30",
         isInputExpanded ? "fixed inset-0 z-[100] flex flex-col pt-20 pb-4 px-4" : "relative",
         isInputExpanded && isMobile && "w-full"
       )}
     >
+      {/* Seamless Progressive Gradient Blur Background */}
+      {!isInputExpanded && (
+        <div className="absolute -top-6 inset-x-0 bottom-0 -z-10 pointer-events-none">
+          {/* Progressive Blur Layers to prevent ghostly opacity and hard cuts */}
+          <div className="absolute inset-0 backdrop-blur-[1px]" style={{ maskImage: 'linear-gradient(to bottom, transparent 0px, black 10px, black 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 0px, black 10px, black 100%)' }} />
+          <div className="absolute inset-0 backdrop-blur-[2px]" style={{ maskImage: 'linear-gradient(to bottom, transparent 10px, black 20px, black 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 10px, black 20px, black 100%)' }} />
+          <div className="absolute inset-0 backdrop-blur-[4px]" style={{ maskImage: 'linear-gradient(to bottom, transparent 20px, black 30px, black 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 20px, black 30px, black 100%)' }} />
+          <div className="absolute inset-0 backdrop-blur-[8px]" style={{ maskImage: 'linear-gradient(to bottom, transparent 30px, black 40px, black 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 30px, black 40px, black 100%)' }} />
+          <div className="absolute inset-0 backdrop-blur-[10px]" style={{ maskImage: 'linear-gradient(to bottom, transparent 40px, black 50px, black 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 40px, black 50px, black 100%)' }} />
+          <div className="absolute inset-0 backdrop-blur-[16px]" style={{ maskImage: 'linear-gradient(to bottom, transparent 50px, black 60px, black 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 50px, black 60px, black 100%)' }} />
+          
+          {/* Background Color Gradient */}
+          <div 
+            className={cn(
+              "absolute inset-0 transition-colors duration-500",
+              darkMode ? "bg-black/30" : "bg-white/50",
+              isAgentMode && (darkMode ? "bg-black/20" : "bg-white/40")
+            )}
+            style={{
+              maskImage: 'linear-gradient(to bottom, transparent 0px, black 40px, black 100%)',
+              WebkitMaskImage: 'linear-gradient(to bottom, transparent 0px, black 40px, black 100%)',
+            }}
+          />
+        </div>
+      )}
+
       {/* Drag overlay */}
       <AnimatePresence>
         {isDragging && (
@@ -649,17 +677,11 @@ const ChatInputArea = React.memo(({
         )}
       </AnimatePresence>
 
-      {/* Background element with blur to avoid nested backdrop-filter bug */}
-      <div className={cn(
-        "absolute inset-0 -z-10 pointer-events-none transition-all duration-500",
-        isInputExpanded ? "backdrop-blur-2xl" : "backdrop-blur-xl",
-        darkMode ? "bg-black/40 border-white/10" : "bg-white/40 border-black/10",
-        isInputExpanded && (darkMode ? "bg-black/60" : "bg-white/60")
-      )} />
-      
+      {/* Background element removed to apply material directly to textarea */}
+
       <div className={cn(
         "relative flex flex-col gap-2 transition-all duration-500",
-        isInputExpanded && (darkMode ? "bg-black/40 p-4 rounded-xl border border-white/10 shadow-2xl h-full backdrop-blur-xl" : "bg-white/60 p-4 rounded-xl border border-black/10 shadow-2xl h-full backdrop-blur-xl")
+        isInputExpanded && (darkMode ? "bg-black/40 p-4 rounded-xl border border-white/10 shadow-2xl h-full" : "bg-white/60 p-4 rounded-xl border border-black/10 shadow-2xl h-full")
       )}>
         {isInputExpanded && (
           <div className="flex justify-between items-center mb-4">
@@ -682,9 +704,9 @@ const ChatInputArea = React.memo(({
             {attachments.map((att, idx) => (
               <div key={idx} className="relative group">
                 {att.type.startsWith('image/') && att.previewUrl ? (
-                  <img src={att.previewUrl} alt={att.name} className="w-16 h-16 object-cover rounded-lg border border-gray-300" />
+                  <img src={att.previewUrl} alt={att.name} className="w-16 h-16 object-cover rounded-lg shadow-sm" />
                 ) : (
-                  <div className="w-16 h-16 flex flex-col items-center justify-center bg-gray-100 rounded-lg border border-gray-300 text-xs text-gray-500 overflow-hidden p-1">
+                  <div className={cn("w-16 h-16 flex flex-col items-center justify-center rounded-lg text-xs overflow-hidden p-1 shadow-sm", darkMode ? "bg-white/5 text-gray-400" : "bg-gray-100 text-gray-500")}>
                     <FileText size={20} className="mb-1" />
                     <span className="truncate w-full text-center">{att.name}</span>
                   </div>
@@ -714,10 +736,11 @@ const ChatInputArea = React.memo(({
                   opacity: { duration: 0.15 },
                   "--reveal-angle": { duration: 0.5, ease: "easeIn" }
                 }}
-                className="absolute -inset-[3px] agent-rainbow-halo pointer-events-none" 
+                className="absolute -inset-[3px] agent-rainbow-halo pointer-events-none rounded-2xl" 
               />
             )}
           </AnimatePresence>
+          
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -729,19 +752,22 @@ const ChatInputArea = React.memo(({
             }}
             placeholder={t.typeInstructions}
             className={cn(
-              "w-full p-4 pr-12 border rounded-xl text-sm focus:outline-none focus:ring-2 transition-all resize-y shadow-inner backdrop-blur-xl",
+              "w-full p-4 pr-12 rounded-2xl text-sm focus:outline-none transition-all resize-y relative z-10",
               isAgentMode 
-                ? (darkMode ? "bg-black/80 border-white/10 focus:ring-purple-500/20" : "bg-white/40 border-black/5 focus:ring-purple-500/20") 
-                : (darkMode ? "bg-black/40 border-white/10" : "bg-white/75 border-black/10"),
-              darkMode ? "text-white placeholder:text-white/30" : "text-gray-900 placeholder:text-gray-400",
-              isInputExpanded ? "flex-1 resize-none h-full" : "min-h-[100px]",
-              !isAgentMode && "focus:ring-blue-500/20 focus:border-blue-500"
+                ? (darkMode 
+                    ? "bg-black/70 shadow-[0_0_20px_rgba(168,85,247,0.25)] focus:shadow-[0_0_30px_rgba(168,85,247,0.35)]" 
+                    : "bg-white/40 shadow-[0_0_20px_rgba(168,85,247,0.15)] focus:shadow-[0_0_25px_rgba(168,85,247,0.25)]") 
+                : (darkMode 
+                    ? "bg-black/70 shadow-[0_0_20px_rgba(37,99,235,0.25)] focus:shadow-[0_0_30px_rgba(37,99,235,0.35)]" 
+                    : "bg-white/40 shadow-[0_0_20px_rgba(0,0,0,0.06)] focus:shadow-[0_0_25px_rgba(0,0,0,0.1)]"),
+              darkMode ? "text-white placeholder:text-white/40" : "text-gray-900 placeholder:text-gray-500",
+              isInputExpanded ? "flex-1 resize-none h-full" : "min-h-[100px]"
             )}
           />
           <button
             onClick={() => setIsInputExpanded(!isInputExpanded)}
             className={cn(
-              "absolute top-3 right-3 p-1.5 rounded-md transition-colors opacity-40 hover:opacity-100",
+              "absolute top-3 right-3 p-1.5 rounded-md transition-colors opacity-40 hover:opacity-100 z-20",
               isInputExpanded && "hidden"
             )}
             title={t.expandedEditor}
@@ -853,6 +879,7 @@ export default function App() {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
   const [showHistory, setShowHistory] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
   const codeScrollRef = useRef<HTMLDivElement>(null);
 
   const messagesRef = useRef(messages);
@@ -1562,9 +1589,9 @@ ${JSON.stringify(currentDocState)}
 Your goal is to break this request into a sequence of highly granular, manageable tasks to ensure maximum detail and avoid AI laziness.
 
 CRITICAL RULES:
-1. YOU MUST NOT OUTPUT A SINGLE TASK. You MUST break the work down into AT LEAST 3-5 tasks. If you output a single task, you have failed.
+1. YOU MUST NEVER OUTPUT A SINGLE TASK. Even if the user request seems simple or focuses on a single section, you MUST break it down into AT LEAST 2-3 logical steps (e.g., "Step 1: Draft the first half of the section", "Step 2: Draft the second half", "Step 3: Review and refine"). If you output a single task, you have failed.
 2. If the user request contains a long list of items, sections, or points to expand, YOU MUST CREATE A SEPARATE TASK FOR EACH SECTION OR ITEM. Do not group them all into one task.
-3. Each task should focus on a specific section, a specific set of points, or a specific range of content (e.g., "Detailed expansion of the 'Personal Experience' section", "In-depth summary of the first 10 pages of notes", "Expand on items 1 and 2 from the source material").
+3. Each task should focus on a specific section, a specific set of points, or a specific range of content.
 4. Tasks must be strictly sequential and collectively cover the entire user request without gaps.
 5. For complex requests, aim for 5-12 granular tasks.
 
@@ -2415,7 +2442,10 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
 
   const documentContent = useMemo(() => (
     <motion.div 
-      layout
+      key={activeSessionId}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.3 }}
       className={cn(
         "max-w-[816px] mx-auto shadow-2xl min-h-[1056px] relative transition-colors duration-500 origin-top border",
         "bg-white text-gray-900",
@@ -2687,7 +2717,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
         </div>
       )}
     </motion.div>
-  ), [docState, focusedBlock, isMobile, isFormatPainterActive, darkMode, copiedFormat]);
+  ), [docState, focusedBlock, isMobile, isFormatPainterActive, darkMode, copiedFormat, activeSessionId]);
 
   return (
     <AnimatePresence mode="wait">
@@ -2841,15 +2871,33 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
       </div>
 
       {/* Global Header */}
-      <header className={cn(
-        "shrink-0 z-50 transition-colors duration-500 relative border-b backdrop-blur-md",
-        darkMode ? "border-white/10 bg-[#1A1A1A]/80" : "border-black/5 bg-white/80",
-        isAgentMode && (darkMode ? "bg-zinc-950/40" : "bg-white/40")
-      )}>
+      <header className="absolute top-0 left-0 right-0 z-50 flex flex-col pointer-events-none">
+        {/* Seamless Progressive Gradient Blur Background for ENTIRE Header */}
+        <div className="absolute inset-x-0 top-0 h-40 pointer-events-none z-0">
+          <div className="absolute inset-0 backdrop-blur-[1px]" style={{ maskImage: 'linear-gradient(to bottom, black 0px, black 100px, transparent 140px)', WebkitMaskImage: 'linear-gradient(to bottom, black 0px, black 100px, transparent 140px)' }} />
+          <div className="absolute inset-0 backdrop-blur-[2px]" style={{ maskImage: 'linear-gradient(to bottom, black 0px, black 90px, transparent 130px)', WebkitMaskImage: 'linear-gradient(to bottom, black 0px, black 90px, transparent 130px)' }} />
+          <div className="absolute inset-0 backdrop-blur-[4px]" style={{ maskImage: 'linear-gradient(to bottom, black 0px, black 80px, transparent 120px)', WebkitMaskImage: 'linear-gradient(to bottom, black 0px, black 80px, transparent 120px)' }} />
+          <div className="absolute inset-0 backdrop-blur-[8px]" style={{ maskImage: 'linear-gradient(to bottom, black 0px, black 70px, transparent 110px)', WebkitMaskImage: 'linear-gradient(to bottom, black 0px, black 70px, transparent 110px)' }} />
+          <div className="absolute inset-0 backdrop-blur-[12px]" style={{ maskImage: 'linear-gradient(to bottom, black 0px, black 60px, transparent 100px)', WebkitMaskImage: 'linear-gradient(to bottom, black 0px, black 60px, transparent 100px)' }} />
+          <div className="absolute inset-0 backdrop-blur-[16px]" style={{ maskImage: 'linear-gradient(to bottom, black 0px, black 50px, transparent 90px)', WebkitMaskImage: 'linear-gradient(to bottom, black 0px, black 50px, transparent 90px)' }} />
+          
+          <div 
+            className={cn(
+              "absolute inset-0 transition-colors duration-500",
+              darkMode ? "bg-black/30" : "bg-white/40",
+              isAgentMode && (darkMode ? "bg-black/20" : "bg-white/30")
+            )}
+            style={{
+              maskImage: 'linear-gradient(to bottom, black 0px, black 80px, transparent 140px)',
+              WebkitMaskImage: 'linear-gradient(to bottom, black 0px, black 80px, transparent 140px)',
+            }}
+          />
+        </div>
+
         {/* Top Bar - Transparent Background */}
         <div className={cn(
-          "flex items-center justify-between px-4 py-2 border-b transition-colors duration-500 backdrop-blur-sm",
-          darkMode ? "bg-transparent border-white/10" : "bg-transparent border-black/5",
+          "flex items-center justify-between px-4 py-2 transition-colors duration-500 pointer-events-auto relative z-40",
+          darkMode ? "bg-transparent" : "bg-transparent",
           isAgentMode && "shadow-none"
         )}>
           <div className="flex items-center gap-3">
@@ -2896,20 +2944,60 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                 >
                   <History size={16} />
                 </button>
-                <img src={user.photoURL || ""} alt="Avatar" className="w-8 h-8 rounded-full border border-gray-300" />
-                {!isMobile && (
-                  <div className="flex flex-col overflow-hidden max-w-[120px]">
-                    <span className="text-[10px] font-medium truncate">{user.displayName}</span>
-                    <span className="text-[8px] opacity-60 truncate">{user.email}</span>
-                  </div>
-                )}
-                <button 
-                  onClick={handleLogout}
-                  className="p-1.5 hover:bg-red-100 hover:text-red-600 rounded-md transition-colors text-gray-400"
-                  title={t.logout}
-                >
-                  <LogOut size={16} />
-                </button>
+                <div className="relative">
+                  <button 
+                    onClick={() => setShowUserMenu(!showUserMenu)}
+                    className={cn(
+                      "flex items-center gap-2 p-1 rounded-lg transition-colors",
+                      darkMode ? "hover:bg-[#333]" : "hover:bg-gray-100"
+                    )}
+                  >
+                    <img src={user.photoURL || ""} alt="Avatar" className="w-8 h-8 rounded-full border border-gray-300" />
+                    {!isMobile && (
+                      <div className="flex flex-col items-start overflow-hidden max-w-[120px]">
+                        <span className="text-[10px] font-medium truncate">{user.displayName}</span>
+                        <span className="text-[8px] opacity-60 truncate">{user.email}</span>
+                      </div>
+                    )}
+                    <ChevronDown size={12} className={cn("transition-transform opacity-40", showUserMenu && "rotate-180")} />
+                  </button>
+
+                  <AnimatePresence>
+                    {showUserMenu && (
+                      <>
+                        <div 
+                          className="fixed inset-0 z-40" 
+                          onClick={() => setShowUserMenu(false)} 
+                        />
+                        <motion.div
+                          initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                          animate={{ opacity: 1, y: 0, scale: 1 }}
+                          exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                          className={cn(
+                            "absolute right-0 mt-2 w-48 rounded-xl shadow-[0_10px_40px_rgba(0,0,0,0.2)] z-[100] overflow-hidden backdrop-blur-2xl transform-gpu will-change-[backdrop-filter]",
+                            darkMode ? "bg-black/80 text-white" : "bg-white/80 text-gray-900"
+                          )}
+                        >
+                          <div className="p-3">
+                            <p className="text-xs font-bold truncate">{user.displayName}</p>
+                            <p className="text-[10px] opacity-60 truncate">{user.email}</p>
+                          </div>
+                          <div className={cn("h-px w-full", darkMode ? "bg-white/10" : "bg-black/5")} />
+                          <button
+                            onClick={() => {
+                              handleLogout();
+                              setShowUserMenu(false);
+                            }}
+                            className="w-full flex items-center gap-2 px-4 py-3 text-sm text-red-500 hover:bg-red-500/10 transition-colors"
+                          >
+                            <LogOut size={16} />
+                            <span>{t.logout}</span>
+                          </button>
+                        </motion.div>
+                      </>
+                    )}
+                  </AnimatePresence>
+                </div>
               </div>
             ) : (
               <button 
@@ -2923,11 +3011,12 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
           </div>
         </div>
 
+        {/* Blur Area (Session Tabs + Tab Switcher) */}
+        <div className="relative pointer-events-auto z-10">
         {/* Session Tabs - Global (Moved above mobile switcher) */}
         <div className={cn(
-          "flex items-center gap-1 px-4 py-2 overflow-x-auto custom-scrollbar shrink-0 z-30 transition-all duration-500 backdrop-blur-2xl",
-          darkMode ? "bg-zinc-900/80 text-white shadow-lg" : "bg-white/90 text-gray-900 shadow-sm",
-          isAgentMode && "shadow-none"
+          "flex items-center gap-1 px-4 py-2 overflow-x-auto no-scrollbar shrink-0 z-30 transition-all duration-500",
+          darkMode ? "text-white" : "text-gray-900"
         )}>
           {sessions.map(s => (
                 <div 
@@ -2936,7 +3025,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                     "group flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer border shrink-0",
                     activeSessionId === s.id 
                       ? (darkMode ? "bg-blue-600 text-white border-blue-500 shadow-md" : "bg-blue-600 text-white border-blue-500 shadow-md")
-                      : (darkMode ? "bg-white/5 border-white/10 text-gray-400 hover:bg-white/10" : "bg-white border-zinc-200 text-gray-600 hover:bg-zinc-50")
+                      : (darkMode ? "bg-white/5 border-white/10 text-gray-400 hover:bg-white/10" : "bg-black/5 border-black/5 text-gray-600 hover:bg-black/10 backdrop-blur-md")
                   )}
                   onClick={() => {
                     const session = sessions.find(sess => sess.id === s.id);
@@ -2998,34 +3087,43 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
           </button>
         </div>
 
-        {/* Tab Switcher */}
-        <div className={cn(
-          "flex px-4 md:hidden backdrop-blur-2xl transition-all duration-500 relative z-20",
-          darkMode ? "bg-zinc-900/60 shadow-md" : "bg-white/80 shadow-sm",
-          isAgentMode && "shadow-none"
-        )}>
-          <button 
-            onClick={() => setActiveTab("chat")}
-            className={cn(
-              "px-6 py-2 text-sm font-medium transition-all border-b-2",
-              activeTab === "chat" 
-                ? "border-blue-600 text-blue-600" 
-                : "border-transparent opacity-60 hover:opacity-100"
-            )}
-          >
-            {t.chat}
-          </button>
-          <button 
-            onClick={() => setActiveTab("preview")}
-            className={cn(
-              "px-6 py-2 text-sm font-medium transition-all border-b-2",
-              activeTab === "preview" 
-                ? "border-blue-600 text-blue-600" 
-                : "border-transparent opacity-60 hover:opacity-100"
-            )}
-          >
-            {t.preview}
-          </button>
+        {/* Tab Switcher with Progressive Gradient Blur */}
+        <div className="relative md:hidden">
+          <div className={cn(
+            "flex justify-center p-2 transition-all duration-500 relative z-20",
+            darkMode ? "bg-transparent" : "bg-transparent"
+          )}>
+            <div className={cn(
+              "flex p-1 rounded-full border transition-all duration-300 backdrop-blur-md",
+              darkMode ? "bg-black/20 border-white/10 shadow-sm" : "bg-white/20 border-black/5 shadow-sm"
+            )}>
+            <button 
+              onClick={() => setActiveTab("chat")}
+              className={cn(
+                "flex items-center gap-2 px-6 py-1.5 rounded-full text-xs font-medium transition-all duration-300",
+                activeTab === "chat" 
+                  ? (darkMode ? "bg-blue-600 text-white shadow-lg shadow-blue-900/20" : "bg-blue-600 text-white shadow-lg shadow-blue-200/50") 
+                  : (darkMode ? "text-gray-400 hover:text-white" : "text-gray-500 hover:text-gray-900")
+              )}
+            >
+              <MessageSquare size={14} />
+              {t.chat}
+            </button>
+            <button 
+              onClick={() => setActiveTab("preview")}
+              className={cn(
+                "flex items-center gap-2 px-6 py-1.5 rounded-full text-xs font-medium transition-all duration-300",
+                activeTab === "preview" 
+                  ? (darkMode ? "bg-blue-600 text-white shadow-lg shadow-blue-900/20" : "bg-blue-600 text-white shadow-lg shadow-blue-200/50") 
+                  : (darkMode ? "text-gray-400 hover:text-white" : "text-gray-500 hover:text-gray-900")
+              )}
+            >
+              <Eye size={14} />
+              {t.preview}
+            </button>
+          </div>
+        </div>
+        </div>
         </div>
       </header>
 
@@ -3038,20 +3136,27 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
         {/* Sidebar - Chat Interface */}
         <motion.div 
           initial={false}
-          animate={{ 
-            width: isMobile ? "100%" : (sidebarOpen ? "450px" : "0px"),
-            x: isMobile ? (activeTab === "chat" ? 0 : "-100%") : 0,
-            opacity: isMobile ? (activeTab === "chat" ? 1 : 0) : 1
+          animate={isMobile ? {
+            x: activeTab === "chat" ? 0 : "-100vw",
+            opacity: activeTab === "chat" ? 1 : 0,
+            width: "100vw"
+          } : { 
+            width: sidebarOpen ? "450px" : "0px",
+            opacity: 1,
+            x: 0
           }}
           transition={{ type: "spring", bounce: 0, duration: 0.4 }}
           className={cn(
             "flex flex-col border-r relative z-10 transition-colors duration-500 overflow-hidden shrink-0 transform-gpu",
-            darkMode ? "border-white/5 bg-black/2 backdrop-blur-2xl transform-gpu will-change-[backdrop-filter]" : "border-black/5 bg-black/[0.05] backdrop-blur-2xl shadow-[4px_0_24px_rgba(0,0,0,0.02)] transform-gpu will-change-[backdrop-filter]",
+            darkMode ? "border-white/5 bg-transparent" : "border-black/5 bg-transparent shadow-[4px_0_24px_rgba(0,0,0,0.02)]",
             (!sidebarOpen && !isMobile) && "border-none",
-            isMobile && "absolute inset-0 z-50 bg-black/[0.05] dark:bg-black/5 backdrop-blur-2xl transform-gpu will-change-[backdrop-filter]",
+            isMobile && "absolute top-0 left-0 w-full h-full z-50 bg-transparent",
             isMobile && activeTab !== "chat" && "pointer-events-none"
           )}
         >
+          {/* Sidebar Background to avoid nested backdrop-filter bug */}
+          <div className="absolute inset-0 -z-10 backdrop-blur-2xl transform-gpu will-change-[backdrop-filter] pointer-events-none" />
+          
           {/* Chat Spotlight Glow - Only in Chat Sidebar */}
           <div className={cn(
             "absolute top-0 left-1/2 -translate-x-1/2 w-[160%] h-[100%] pointer-events-none z-0 opacity-60",
@@ -3064,7 +3169,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
         <div className={cn(
           "flex flex-col h-full relative z-10 w-full"
         )}>
-          <div className="flex-1 overflow-y-auto custom-scrollbar relative">
+          <div className="absolute inset-0 overflow-y-auto custom-scrollbar pt-[110px] md:pt-[60px] pb-[200px]">
           <AnimatePresence>
             {showHistory ? (
               <motion.div 
@@ -3131,8 +3236,8 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                         />
                         <div className="absolute -inset-1 bg-gradient-to-r from-blue-600 to-purple-600 rounded-xl blur opacity-25 group-hover:opacity-75 transition duration-1000 group-hover:duration-200"></div>
                         <div className={cn(
-                          "relative px-6 py-3 ring-1 ring-gray-900/5 rounded-xl leading-none flex items-center gap-3 transition-all backdrop-blur-xl",
-                          darkMode ? "bg-black/40 border-white/10" : "bg-white/60 border-black/10"
+                          "relative px-6 py-3 rounded-xl leading-none flex items-center gap-3 transition-all backdrop-blur-xl shadow-[0_0_20px_rgba(37,99,235,0.2)]",
+                          darkMode ? "bg-black/40" : "bg-white/60"
                         )}>
                           <Upload className="text-blue-600 dark:text-blue-400" size={20} />
                           <span className="text-base font-semibold text-gray-800 dark:text-gray-100">
@@ -3143,8 +3248,8 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
 
                       {/* Cool Agent Mode Toggle - Redesigned */}
                       <div className={cn(
-                        "relative flex items-center p-1 rounded-full border shadow-inner w-64 h-12 overflow-hidden transition-all backdrop-blur-xl",
-                        darkMode ? "bg-black/20 border-white/10" : "bg-white/40 border-black/10"
+                        "relative flex items-center p-1 rounded-full shadow-inner w-64 h-12 overflow-hidden transition-all backdrop-blur-xl",
+                        darkMode ? "bg-black/20 shadow-[0_0_15px_rgba(0,0,0,0.2)]" : "bg-white/40 shadow-[0_0_15px_rgba(0,0,0,0.05)]"
                       )}>
                         {/* Sliding Background */}
                         <motion.div 
@@ -3197,10 +3302,15 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                   >
                     <div
                       className={cn(
-                        "group relative max-w-[90%] p-3 rounded-2xl text-sm leading-relaxed shadow-xl border backdrop-blur-2xl transform-gpu will-change-[backdrop-filter]",
+                        "group relative max-w-[90%] p-3 rounded-2xl text-sm leading-relaxed backdrop-blur-2xl transform-gpu will-change-[backdrop-filter] transition-all duration-500",
                         msg.role === "user" 
-                          ? "bg-blue-600/70 text-white rounded-tr-none border-blue-500/50" 
-                          : cn("rounded-tl-none", darkMode ? "bg-black/40 border-white/10 text-white" : "bg-white/85 border-zinc-200 text-gray-900")
+                          ? "bg-blue-600/70 text-white rounded-tr-none shadow-[0_0_20px_rgba(37,99,235,0.4)]" 
+                          : cn(
+                              "rounded-tl-none", 
+                              darkMode 
+                                ? "bg-black/40 text-white shadow-[0_0_20px_rgba(0,0,0,0.5)]" 
+                                : "bg-white/85 text-gray-900 shadow-[0_0_20px_rgba(0,0,0,0.08)]"
+                            )
                       )}
                     >
                       {msg.steps && msg.steps.length > 0 && (
@@ -3239,18 +3349,27 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                         <div className="prose prose-sm max-w-none prose-p:leading-relaxed dark:prose-invert overflow-x-hidden">
                           {msg.text ? (
                             <Markdown
-                            remarkPlugins={[remarkMath]}
+                            remarkPlugins={[remarkMath, remarkGfm]}
                             rehypePlugins={[rehypeKatex]}
                             components={{
                               p: ({ children }: any) => <div className="mb-4">{children}</div>,
+                              table: ({ children }: any) => (
+                                <div className="overflow-x-auto custom-scrollbar my-4 rounded-lg border border-gray-200 dark:border-gray-800">
+                                  <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-800 m-0">
+                                    {children}
+                                  </table>
+                                </div>
+                              ),
+                              th: ({ children }: any) => <th className="px-4 py-2 bg-gray-50 dark:bg-gray-800/50 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{children}</th>,
+                              td: ({ children }: any) => <td className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 border-t border-gray-100 dark:border-gray-800/50">{children}</td>,
                               code({ node, inline, className, children, ...props }: any) {
                                 const match = /language-(\w+)/.exec(className || "");
                                 const language = match ? match[1] : "text";
                                 return !inline ? (
-                                  <div className="relative rounded-xl overflow-hidden my-4 shadow-xl border backdrop-blur-2xl border-white/10 dark:border-white/10 transform-gpu will-change-[backdrop-filter]">
+                                  <div className="relative rounded-xl overflow-hidden my-4 shadow-2xl backdrop-blur-2xl transform-gpu will-change-[backdrop-filter]">
                                     <div className={cn(
                                       "flex items-center justify-between px-4 py-2 border-b text-xs font-mono",
-                                      darkMode ? "bg-black/30 border-white/10 text-white" : "bg-black/[0.18] border-black/20 text-gray-900"
+                                      darkMode ? "bg-black/60 border-white/10 text-white" : "bg-white/80 border-black/10 text-gray-900"
                                     )}>
                                       <span className="font-semibold">{language}</span>
                                       <button
@@ -3352,63 +3471,68 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
               </div>
             )}
           </AnimatePresence>
-        </div>
+          </div>
 
-        {/* Agent Progress */}
-        {agentState.isActive && agentState.sessionId === activeSessionId && (
-          <div className="px-4 pb-2">
-            <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-3">
-              <div className="flex justify-between items-center mb-2">
-                <span className="text-sm font-medium text-blue-800 dark:text-blue-300">
-                  {t.agent} ({agentState.currentIndex + 1}/{Math.max(1, agentState.tasks.length)})
-                </span>
-                <div className="flex items-center gap-3">
-                  <span className="text-xs text-blue-600 dark:text-blue-400">
-                    {Math.round(((agentState.currentIndex) / Math.max(1, agentState.tasks.length)) * 100)}%
-                  </span>
-                  <button 
-                    onClick={() => {
-                      agentCancelRef.current = true;
-                      setAgentState(prev => prev.sessionId === activeSessionId ? { ...prev, isActive: false } : prev);
-                    }}
-                    className="text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
-                  >
-                    {t.cancel}
-                  </button>
+          {/* Bottom Area (Absolute) */}
+          <div className="absolute bottom-0 left-0 right-0 z-20 flex flex-col justify-end pointer-events-none">
+            {/* Agent Progress */}
+            {agentState.isActive && agentState.sessionId === activeSessionId && (
+              <div className="px-4 pb-2 pointer-events-auto relative z-40">
+                <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-3 backdrop-blur-md">
+                  <div className="flex justify-between items-center mb-2">
+                    <span className="text-sm font-medium text-blue-800 dark:text-blue-300">
+                      {t.agent} ({agentState.currentIndex + 1}/{Math.max(1, agentState.tasks.length)})
+                    </span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-blue-600 dark:text-blue-400">
+                        {Math.round(((agentState.currentIndex) / Math.max(1, agentState.tasks.length)) * 100)}%
+                      </span>
+                      <button 
+                        onClick={() => {
+                          agentCancelRef.current = true;
+                          setAgentState(prev => prev.sessionId === activeSessionId ? { ...prev, isActive: false } : prev);
+                        }}
+                        className="text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+                      >
+                        {t.cancel}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="w-full bg-blue-200 dark:bg-blue-800 rounded-full h-2">
+                    <div 
+                      className="bg-blue-600 dark:bg-blue-500 h-2 rounded-full transition-all duration-500" 
+                      style={{ width: `${((agentState.currentIndex) / Math.max(1, agentState.tasks.length)) * 100}%` }}
+                    ></div>
+                  </div>
+                  <div className="mt-2 text-xs text-blue-700 dark:text-blue-400 truncate">
+                    {t.task}: {agentState.tasks[agentState.currentIndex] || t.planningTasks}
+                  </div>
                 </div>
               </div>
-              <div className="w-full bg-blue-200 dark:bg-blue-800 rounded-full h-2">
-                <div 
-                  className="bg-blue-600 dark:bg-blue-500 h-2 rounded-full transition-all duration-500" 
-                  style={{ width: `${((agentState.currentIndex) / Math.max(1, agentState.tasks.length)) * 100}%` }}
-                ></div>
-              </div>
-              <div className="mt-2 text-xs text-blue-700 dark:text-blue-400 truncate">
-                {t.task}: {agentState.tasks[agentState.currentIndex] || t.planningTasks}
-              </div>
+            )}
+
+            {/* Larger Input Area */}
+            <div className="pointer-events-auto">
+              <ChatInputArea 
+                key={activeSessionId}
+                onSendMessage={handleSendMessage}
+                isLoading={isCurrentSessionLoading}
+                isInputExpanded={isInputExpanded}
+                setIsInputExpanded={setIsInputExpanded}
+                darkMode={darkMode}
+                isMobile={isMobile}
+                selectedModel={selectedModel}
+                setSelectedModel={setSelectedModel}
+                showCode={showCode}
+                setShowCode={setShowCode}
+                isAgentMode={isAgentMode}
+                setIsAgentMode={setIsAgentMode}
+                lang={lang}
+              />
             </div>
           </div>
-        )}
-
-        {/* Larger Input Area */}
-        <ChatInputArea 
-          key={activeSessionId}
-          onSendMessage={handleSendMessage}
-          isLoading={isCurrentSessionLoading}
-          isInputExpanded={isInputExpanded}
-          setIsInputExpanded={setIsInputExpanded}
-          darkMode={darkMode}
-          isMobile={isMobile}
-          selectedModel={selectedModel}
-          setSelectedModel={setSelectedModel}
-          showCode={showCode}
-          setShowCode={setShowCode}
-          isAgentMode={isAgentMode}
-          setIsAgentMode={setIsAgentMode}
-          lang={lang}
-        />
-      </div>
-    </motion.div>
+        </div>
+      </motion.div>
 
       {/* Toggle Sidebar Button (when closed) */}
       {!sidebarOpen && !isMobile && (
@@ -3426,35 +3550,40 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
 
       <motion.main 
         initial={false}
-        animate={{
-          x: isMobile ? (activeTab === "preview" ? 0 : "100%") : 0,
-          opacity: isMobile ? (activeTab === "preview" ? 1 : 0) : 1
+        animate={isMobile ? {
+          x: activeTab === "preview" ? 0 : "100vw",
+          opacity: activeTab === "preview" ? 1 : 0,
+          width: "100vw"
+        } : {
+          x: 0,
+          opacity: 1,
+          width: "auto"
         }}
         transition={{ type: "spring", bounce: 0, duration: 0.4 }}
         className={cn(
-          "flex-1 flex flex-col overflow-hidden relative z-10 transition-colors duration-500",
+          "flex-1 flex flex-col overflow-hidden relative z-10 transition-colors duration-500 transform-gpu",
           "bg-transparent",
-          isMobile && "absolute inset-0 z-40",
+          isMobile && "absolute top-0 left-0 w-full h-full z-40",
           isMobile && activeTab !== "preview" && "pointer-events-none"
         )}
       >
         {/* Document Sandbox */}
         <div className={cn(
-          "flex-1 overflow-y-auto p-4 md:p-12 custom-scrollbar transition-colors duration-500 relative z-10",
+          "absolute inset-0 overflow-y-auto p-4 md:p-12 pt-[90px] md:pt-[70px] custom-scrollbar transition-colors duration-500 z-10",
           "bg-transparent"
         )}>
           {/* Document Toolbar - Subheader */}
           <div 
             ref={toolbarRef}
             className={cn(
-              "sticky top-0 z-30 min-h-10 py-1.5 flex flex-wrap justify-center items-center px-2 md:px-4 shrink-0 transition-all mb-6 rounded-xl shadow-2xl w-fit mx-auto",
+              "sticky top-[80px] md:top-[50px] z-30 min-h-10 py-1.5 flex flex-wrap justify-center items-center px-2 md:px-4 shrink-0 transition-all mb-6 rounded-xl shadow-2xl w-fit mx-auto",
               darkMode ? "text-white" : "text-gray-900"
             )}
           >
             {/* Background element with blur to avoid nested backdrop-filter bug on dropdowns */}
             <div className={cn(
               "absolute inset-0 rounded-xl border -z-10 backdrop-blur-2xl pointer-events-none transform-gpu will-change-[backdrop-filter]",
-              darkMode ? "bg-black/40 border-white/10" : "bg-white/80 border-black/10"
+              darkMode ? "bg-black/30 border-white/10" : "bg-white/40 border-black/5"
             )} />
             
             <div className="flex flex-wrap items-center justify-center gap-0.5">
@@ -3819,7 +3948,9 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
             </div>
           </div>
 
-          {documentContent}
+          <AnimatePresence mode="wait">
+            {documentContent}
+          </AnimatePresence>
         </div>
 
         {/* AI Code Window Overlay */}
@@ -3831,7 +3962,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
               exit={{ opacity: 0, y: 20 }}
               className={cn(
                 "absolute inset-0 z-50 flex flex-col transition-all backdrop-blur-2xl transform-gpu will-change-[backdrop-filter]",
-                darkMode ? "bg-black/30 border-white/10 text-white" : "bg-black/[0.18] border-black/20 text-gray-900"
+                darkMode ? "bg-black/60 border-white/10 text-white" : "bg-white/80 border-black/10 text-gray-900"
               )}
             >
               <div className={cn(
@@ -3907,40 +4038,63 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
       </AnimatePresence>
 
       {/* Confirm Modal */}
-      {confirmAction && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 transform-gpu will-change-[backdrop-filter]">
-          <div className={cn(
-            "w-full max-w-sm p-6 rounded-2xl shadow-2xl relative",
-            darkMode ? "text-white" : "text-gray-900"
-          )}>
-            <div className={cn(
-              "absolute inset-0 rounded-2xl border -z-10 backdrop-blur-2xl pointer-events-none transform-gpu will-change-[backdrop-filter]",
-              darkMode ? "bg-black/30 border-white/10" : "bg-black/[0.18] border-black/20"
-            )} />
-            <h3 className="text-lg font-semibold mb-4">Confirm Action</h3>
-            <p className="mb-6 opacity-80">{confirmAction.message}</p>
-            <div className="flex justify-end gap-3">
-              <button
-                onClick={() => setConfirmAction(null)}
-                className={cn(
-                  "px-4 py-2 rounded-lg font-medium transition-colors",
-                  darkMode ? "hover:bg-[#333]" : "hover:bg-gray-100"
-                )}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={confirmAction.action}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
-              >
-                Confirm
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <AnimatePresence>
+        {confirmAction && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 transform-gpu will-change-[backdrop-filter]"
+          >
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className={cn(
+                "w-full max-w-sm p-6 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.3)] relative overflow-hidden",
+                darkMode ? "text-white" : "text-gray-900"
+              )}
+            >
+              <div className={cn(
+                "absolute inset-0 border -z-10 backdrop-blur-3xl pointer-events-none transform-gpu will-change-[backdrop-filter]",
+                darkMode ? "bg-black/80 border-white/10" : "bg-white/90 border-black/10"
+              )} />
+              <h3 className="text-lg font-bold mb-2">Confirm Action</h3>
+              <p className="mb-6 text-sm opacity-70 leading-relaxed">{confirmAction.message}</p>
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => setConfirmAction(null)}
+                  className={cn(
+                    "px-4 py-2 rounded-xl font-medium transition-all active:scale-95",
+                    darkMode ? "hover:bg-white/10 text-gray-300" : "hover:bg-black/5 text-gray-600"
+                  )}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    confirmAction.action();
+                    setConfirmAction(null);
+                  }}
+                  className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold transition-all shadow-lg shadow-blue-500/25 active:scale-95"
+                >
+                  Confirm
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <style>{`
+        .no-scrollbar::-webkit-scrollbar {
+          display: none;
+        }
+        .no-scrollbar {
+          -ms-overflow-style: none;
+          scrollbar-width: none;
+        }
+
         .custom-scrollbar::-webkit-scrollbar {
           width: 6px;
         }
