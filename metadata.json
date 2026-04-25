@@ -1,5 +1,5 @@
 {
-  "name": "AI Doc Editor",
-  "description": "An AI-powered document editor with formula support and document isolation.",
+  "name": "AI Word Sandbox",
+  "description": "An AI-powered document editor with formula support and agent-driven document composition.",
   "requestFramePermissions": []
 }

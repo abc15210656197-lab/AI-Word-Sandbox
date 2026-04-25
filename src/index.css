@@ -12,6 +12,10 @@ body {
   @apply bg-zinc-50 text-zinc-900;
 }
 
+.dark body {
+  @apply bg-[#0f172a] text-zinc-100;
+}
+
 .markdown-body {
   @apply prose prose-zinc max-w-none;
 }
@@ -106,4 +110,15 @@ body {
     radial-gradient(at 0% 0%, rgba(70, 20, 50, 0.5) 0%, transparent 70%),
     radial-gradient(at 100% 100%, rgba(10, 40, 60, 0.5) 0%, transparent 70%),
     #0f071a;
+}
+
+/* Force syntax highlighter to be fully transparent so our glassmorphism overlay shows through */
+.ai-code-panel pre {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+.ai-code-panel code {
+  background: transparent !important;
+  background-color: transparent !important;
 }

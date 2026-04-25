@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
-import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, orderBy, limit, onSnapshot, getDocFromServer } from 'firebase/firestore';
+import { getFirestore, doc, setDoc, getDoc, getDocs, collection, addDoc, query, orderBy, limit, onSnapshot, getDocFromServer, where, deleteDoc, serverTimestamp } from 'firebase/firestore';
 // @ts-ignore
 import firebaseConfig from '../firebase-applet-config.json';
 import { replacer } from './lib/json-utils';
@@ -10,6 +10,11 @@ const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+
+export { 
+  doc, setDoc, getDoc, getDocs, collection, addDoc, query, orderBy, limit, onSnapshot, getDocFromServer, where, deleteDoc, serverTimestamp
+};
+
 
 export enum OperationType {
   CREATE = 'create',

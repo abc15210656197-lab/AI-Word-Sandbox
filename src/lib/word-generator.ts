@@ -15,7 +15,56 @@ import {
   ImageRun
 } from "docx";
 import { saveAs } from "file-saver";
+import katex from "katex";
+import { toPng } from "html-to-image";
 import { DocumentState, DocParagraph, DocTable, DocImage } from "../types";
+
+async function formulaToImage(latex: string, isBlock: boolean = false): Promise<{ data: Uint8Array, width: number, height: number } | null> {
+  const container = document.createElement('div');
+  container.style.position = 'absolute';
+  container.style.left = '-9999px';
+  container.style.top = '-9999px';
+  container.style.padding = '4px';
+  container.style.background = 'white';
+  container.style.color = 'black';
+  container.style.display = 'inline-block';
+  container.style.fontSize = '24px'; // Larger for better quality
+  
+  const mathSpan = document.createElement('span');
+  try {
+    katex.render(latex.replace(/^\$\$?/, '').replace(/\$\$?$/, ''), mathSpan, {
+      displayMode: isBlock,
+      throwOnError: false
+    });
+    container.appendChild(mathSpan);
+    document.body.appendChild(container);
+    
+    // Small delay to ensure rendering is complete
+    await new Promise(r => setTimeout(r, 50));
+    
+    const dataUrl = await toPng(container, { backgroundColor: 'white', pixelRatio: 2 });
+    const img = new Image();
+    img.src = dataUrl;
+    await new Promise(r => img.onload = r);
+    
+    const width = img.naturalWidth / 2; 
+    const height = img.naturalHeight / 2;
+    
+    const base64 = dataUrl.split(',')[1];
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    
+    document.body.removeChild(container);
+    return { data: bytes, width, height };
+  } catch (e) {
+    console.error("Formula render error", e);
+    if (container.parentElement) document.body.removeChild(container);
+    return null;
+  }
+}
 
 export async function generateWordDoc(state: DocumentState, resolveImage?: (src: string, alt?: string) => Promise<Uint8Array | string | null>) {
   const extractFont = (fontFamily?: string) => {
@@ -24,7 +73,7 @@ export async function generateWordDoc(state: DocumentState, resolveImage?: (src:
     return firstFont;
   };
 
-  const createParagraph = (p: DocParagraph) => {
+  const createParagraph = async (p: DocParagraph) => {
     let heading;
     if (p.isHeading) {
       switch (p.headingLevel) {
@@ -53,21 +102,125 @@ export async function generateWordDoc(state: DocumentState, resolveImage?: (src:
       numbering = { reference: "numbers", level: 0 };
     }
 
-    const children = p.runs ? p.runs.map(run => new TextRun({
-      text: run.text,
-      bold: run.isBold,
-      italics: run.isItalic,
-      color: run.color?.replace("#", ""),
-      font: extractFont(run.fontFamily) || extractFont(p.fontFamily),
-    })) : [
-      new TextRun({
-        text: p.text || "",
-        bold: p.isBold,
-        italics: p.isItalic,
-        color: p.color?.replace("#", ""),
-        font: extractFont(p.fontFamily),
-      }),
-    ];
+    const processTextWithMath = async (text: string, baseStyle: any) => {
+      if (!text) return [];
+      
+      // Cleanup corruption (Form Feed etc)
+      const sanitizedText = text
+        .replace(/\x0C/g, '\\f')
+        .replace(/\x0B/g, '\\v')
+        .replace(/\x08/g, '\\b')
+        .replace(/\x0D/g, '\\r')
+        .replace(/\x09/g, '\\t');
+
+      // Unicode-aware math detection
+      const mathRegex = /(\$\$[\s\S]*?\$\$|\$[\s\S]*?\$)/gu;
+      const parts = sanitizedText.split(mathRegex);
+      const runs: any[] = [];
+
+      for (const part of parts) {
+        if (!part) continue;
+        if ((part.startsWith('$$') && part.endsWith('$$')) || (part.startsWith('$') && part.endsWith('$'))) {
+          const isBlock = part.startsWith('$$');
+          const latex = part.replace(/^\$\$?/, '').replace(/\$\$?$/, '');
+          const img = await formulaToImage(latex, isBlock);
+          if (img) {
+            runs.push(new ImageRun({
+              data: img.data,
+              transformation: {
+                width: img.width * (isBlock ? 0.9 : 0.7), // Scale for Word
+                height: img.height * (isBlock ? 0.9 : 0.7),
+              },
+            } as any));
+            continue;
+          }
+        }
+        
+        // Split text by emojis to wrap them in a font that supports them (Segoe UI Emoji)
+        // This prevents corruption like 'ğ' appearing instead of emojis in Word/WPS
+        const emojiRegex = /[\u{1F000}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu;
+        const emojiMatches = Array.from(part.matchAll(emojiRegex));
+        
+        if (emojiMatches.length > 0) {
+          let lastIndex = 0;
+          for (const match of emojiMatches) {
+            const index = match.index!;
+            const textBefore = part.substring(lastIndex, index);
+            if (textBefore) {
+              runs.push(new TextRun({
+                text: textBefore,
+                ...baseStyle
+              }));
+            }
+            runs.push(new TextRun({
+              text: match[0],
+              ...baseStyle,
+              font: {
+                ascii: "Segoe UI Emoji",
+                eastAsia: "Segoe UI Emoji",
+                hAnsi: "Segoe UI Emoji",
+                cs: "Segoe UI Emoji"
+              }
+            }));
+            lastIndex = index + match[0].length;
+          }
+          const textAfter = part.substring(lastIndex);
+          if (textAfter) {
+            runs.push(new TextRun({
+              text: textAfter,
+              ...baseStyle
+            }));
+          }
+        } else {
+          runs.push(new TextRun({
+            text: part,
+            ...baseStyle
+          }));
+        }
+      }
+      return runs;
+    };
+
+    const children = p.runs ? (await Promise.all(p.runs.map(async (run) => {
+      if (run.isFormula) {
+        const img = await formulaToImage(run.text, false);
+        if (img) {
+          return [new ImageRun({
+            data: img.data,
+            transformation: {
+              width: img.width * 0.75,
+              height: img.height * 0.75,
+            },
+          } as any)];
+        }
+        return [new TextRun({ text: run.text })];
+      }
+      return await processTextWithMath(run.text, {
+        bold: run.isBold,
+        italics: run.isItalic,
+        color: run.color?.replace("#", ""),
+        font: run.fontFamily || p.fontFamily ? {
+          ascii: extractFont(run.fontFamily) || extractFont(p.fontFamily) || "Arial",
+          hAnsi: extractFont(run.fontFamily) || extractFont(p.fontFamily) || "Arial",
+          eastAsia: extractFont(run.fontFamily) || extractFont(p.fontFamily) || "Microsoft YaHei",
+          cs: extractFont(run.fontFamily) || extractFont(p.fontFamily) || "Arial"
+        } : undefined,
+        subScript: run.subscript || p.subscript,
+        superScript: run.superscript || p.superscript,
+      });
+    }))).flat() : await processTextWithMath(p.text || "", {
+      bold: p.isBold,
+      italics: p.isItalic,
+      color: p.color?.replace("#", ""),
+      font: p.fontFamily ? {
+        ascii: extractFont(p.fontFamily) || "Arial",
+        hAnsi: extractFont(p.fontFamily) || "Arial",
+        eastAsia: extractFont(p.fontFamily) || "Microsoft YaHei",
+        cs: extractFont(p.fontFamily) || "Arial"
+      } : undefined,
+      subScript: p.subscript,
+      superScript: p.superscript,
+    });
 
     return new Paragraph({
       heading,
@@ -83,7 +236,12 @@ export async function generateWordDoc(state: DocumentState, resolveImage?: (src:
       default: {
         document: {
           run: {
-            font: "Arial",
+            font: {
+              ascii: "Arial",
+              eastAsia: "Microsoft YaHei",
+              hAnsi: "Arial",
+              cs: "Arial"
+            },
             size: 24, // 12pt
             color: "333333",
           },
@@ -168,15 +326,15 @@ export async function generateWordDoc(state: DocumentState, resolveImage?: (src:
                   size: tableData.width ? parseInt(tableData.width) : 100,
                   type: tableData.width?.includes('%') ? WidthType.PERCENTAGE : WidthType.AUTO,
                 },
-                rows: (tableData.rows || []).map(row => new TableRow({
-                  children: (row.cells || []).map(cell => new TableCell({
-                    children: (cell.content || []).map(cp => createParagraph(cp)),
+                rows: await Promise.all((tableData.rows || []).map(async row => new TableRow({
+                  children: await Promise.all((row.cells || []).map(async cell => new TableCell({
+                    children: await Promise.all((cell.content || []).map(cp => createParagraph(cp))),
                     shading: cell.backgroundColor ? { fill: cell.backgroundColor.replace("#", "") } : undefined,
                     verticalAlign: cell.verticalAlign === 'center' ? VerticalAlign.CENTER : 
                                   cell.verticalAlign === 'bottom' ? VerticalAlign.BOTTOM : 
                                   VerticalAlign.TOP,
-                  })),
-                })),
+                  }))),
+                }))),
               });
             }
             if (p.type === 'image') {
@@ -251,7 +409,26 @@ export async function generateWordDoc(state: DocumentState, resolveImage?: (src:
               }
               return new Paragraph({ children: [new TextRun({ text: "[Image: " + imgData.src + "]" })] });
             }
-            return createParagraph(p as DocParagraph);
+            if (p.type === 'formula') {
+              const formulaData = p as any;
+              const img = await formulaToImage(formulaData.latex, true);
+              
+              return new Paragraph({
+                alignment: formulaData.alignment === 'center' ? AlignmentType.CENTER : 
+                           formulaData.alignment === 'right' ? AlignmentType.RIGHT : 
+                           AlignmentType.LEFT,
+                children: img ? [
+                  new ImageRun({
+                    data: img.data,
+                    transformation: {
+                      width: img.width,
+                      height: img.height,
+                    },
+                  } as any)
+                ] : [new TextRun({ text: formulaData.latex })]
+              });
+            }
+            return await createParagraph(p as DocParagraph);
           })
         )).then(res => res.flat()),
       },

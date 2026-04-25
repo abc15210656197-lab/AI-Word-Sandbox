@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { GoogleGenAI, ThinkingLevel } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   Send, 
@@ -50,7 +50,9 @@ import {
   Languages,
   Upload,
   Sparkles,
-  Eye
+  Eye,
+  MoreHorizontal,
+  Info
 } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkMath from "remark-math";
@@ -72,9 +74,7 @@ import {
   onAuthStateChanged, 
   User,
   handleFirestoreError,
-  OperationType
-} from "./firebase";
-import { 
+  OperationType,
   doc, 
   setDoc, 
   collection, 
@@ -86,7 +86,7 @@ import {
   where,
   orderBy,
   deleteDoc
-} from "firebase/firestore";
+} from "./firebase";
 import ImageKit from "imagekit-javascript";
 
 const imagekit = new ImageKit({
@@ -229,6 +229,29 @@ const translations = {
   }
 };
 
+const TopBlur = ({ darkMode, isAgentMode }: { darkMode: boolean, isAgentMode: boolean }) => (
+  <div className="absolute inset-x-0 top-0 h-40 pointer-events-none z-20 select-none">
+    <div className="absolute inset-0 backdrop-blur-[1px]" style={{ maskImage: 'linear-gradient(to bottom, black 0px, black 100px, transparent 140px)', WebkitMaskImage: 'linear-gradient(to bottom, black 0px, black 100px, transparent 140px)' }} />
+    <div className="absolute inset-0 backdrop-blur-[2px]" style={{ maskImage: 'linear-gradient(to bottom, black 0px, black 90px, transparent 130px)', WebkitMaskImage: 'linear-gradient(to bottom, black 0px, black 90px, transparent 130px)' }} />
+    <div className="absolute inset-0 backdrop-blur-[4px]" style={{ maskImage: 'linear-gradient(to bottom, black 0px, black 80px, transparent 120px)', WebkitMaskImage: 'linear-gradient(to bottom, black 0px, black 80px, transparent 120px)' }} />
+    <div className="absolute inset-0 backdrop-blur-[8px]" style={{ maskImage: 'linear-gradient(to bottom, black 0px, black 70px, transparent 110px)', WebkitMaskImage: 'linear-gradient(to bottom, black 0px, black 70px, transparent 110px)' }} />
+    <div className="absolute inset-0 backdrop-blur-[12px]" style={{ maskImage: 'linear-gradient(to bottom, black 0px, black 60px, transparent 100px)', WebkitMaskImage: 'linear-gradient(to bottom, black 0px, black 60px, transparent 100px)' }} />
+    <div className="absolute inset-0 backdrop-blur-[16px]" style={{ maskImage: 'linear-gradient(to bottom, black 0px, black 50px, transparent 90px)', WebkitMaskImage: 'linear-gradient(to bottom, black 0px, black 50px, transparent 90px)' }} />
+    
+    <div 
+      className={cn(
+        "absolute inset-0 transition-colors duration-500",
+        darkMode ? "bg-black/30" : "bg-white/40",
+        isAgentMode && (darkMode ? "bg-black/20" : "bg-white/30")
+      )}
+      style={{
+        maskImage: 'linear-gradient(to bottom, black 0px, black 80px, transparent 140px)',
+        WebkitMaskImage: 'linear-gradient(to bottom, black 0px, black 80px, transparent 140px)',
+      }}
+    />
+  </div>
+);
+
 const SYSTEM_INSTRUCTION = `你是一个专业的 AI Word 文档助手。你的目标是帮助用户通过持续编辑系统创建和编辑高质量的 Word 文档。
 
 ### 核心任务
@@ -247,7 +270,9 @@ const SYSTEM_INSTRUCTION = `你是一个专业的 AI Word 文档助手。你的�
 - **配色方案**：使用专业的配色（如深蓝色 #1F3864 用于 H1，蓝色 #2E75B6 用于 H2）。严禁“无脑”使用纯红色 (#FF0000)。只有当用户明确要求（例如：“把加粗的部分用红色表示”）时，才允许对相应段落或文本片段 (runs) 使用 "color": "#FF0000"。
 - **混合样式 (Runs)**：如果同一行内需要不同的颜色、加粗样式、上标或下标，必须使用 "runs" 数组，而不是拆分成多个段落。
 - **角标支持**：在处理化学式（如 CO₂）、数学公式（如 x²）或特定单位时，必须使用 "subscript": true（下标）或 "superscript": true（上标）。严禁直接使用 unicode 的上标/下标字符。
-- **数学公式渲染**：对于复杂的数学公式（如分式、根号、积分等），必须使用 LaTeX 语法并包裹在 $ (行内) 或 $$ (独立行) 中。例如：分式使用 \frac{a}{b}，根号使用 \sqrt{x}。示例：$$T = 2\pi \sqrt{\frac{r^3}{G(M_1 + M_2)}}$$。这能确保公式以专业格式渲染。
+- **数学公式渲染 (CRITICAL)**：对于复杂的数学公式（如分式、根号、积分等），必须使用 LaTeX 语法并包裹在 $ (行内) 或 $$ (独立行) 中。
+  - **JSON 转义规则**：由于你是在 JSON 中提供 LaTeX，你**必须**对所有反斜杠进行双重转义。例如：使用 "\\\\frac{a}{b}" 而不是 "\frac{a}{b}"。如果只使用单反斜杠，JSON 解析会失败或产生错误字符（如 \f 变成换页符）。
+  - **示例**：\`"text": "$$\\\\frac{x^2}{a^2} + \\\\frac{y^2}{b^2} = 1$$"\`。
 - **图片支持与匹配规范**：你可以插入图片。如果用户上传了图片，系统会在提示词中提供图片预览及其对应的 \`[Uploaded Image URL: <url>]\`。
   - **精准匹配**：你必须仔细识别图片内容，并将其插入到文档中最相关的文字描述附近。严禁乱序插入或张冠李戴。
   - **优先使用 URL**：你**必须**优先使用提示词中提供的 URL 作为图片的 "src"。
@@ -412,16 +437,16 @@ function ModelSelector({
       <button 
         onClick={() => setIsOpen(!isOpen)}
         className={cn(
-          "flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-all border shadow-sm backdrop-blur-2xl transform-gpu will-change-[backdrop-filter]",
+          "p-2 rounded-lg transition-colors flex items-center gap-1.5 text-xs font-medium border border-transparent",
           isOpen 
-            ? (darkMode ? "bg-white/20 text-white border-white/30 shadow-lg" : "bg-white/80 text-black border-white shadow-lg")
+            ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
             : (darkMode 
-                ? "bg-black/30 border-white/10 text-gray-200 hover:bg-black/50" 
-                : "bg-white/50 border-black/5 text-gray-700 hover:bg-white/70")
+                ? "text-gray-400 hover:bg-[#444]" 
+                : "text-gray-500 hover:bg-gray-200")
         )}
       >
         <div className="flex items-center gap-2">
-          <span className="text-lg">{selectedModel.icon}</span>
+          <span>{selectedModel.icon}</span>
           <span>{selectedModel.name}</span>
           {isAgentMode && (
             <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-purple-500/20 text-purple-400 text-[10px] font-bold uppercase tracking-wider border border-purple-500/30">
@@ -429,7 +454,7 @@ function ModelSelector({
             </span>
           )}
         </div>
-        <ChevronRight size={16} className={cn("transition-transform duration-200", isOpen ? "rotate-90" : "")} />
+        <ChevronRight size={14} className={cn("transition-transform duration-200 opacity-50", isOpen ? "rotate-90" : "")} />
       </button>
       
       <AnimatePresence>
@@ -635,15 +660,10 @@ const ChatInputArea = React.memo(({
       )}
     >
       {/* Seamless Progressive Gradient Blur Background */}
-      {!isInputExpanded && (
+      {!isInputExpanded ? (
         <div className="absolute -top-6 inset-x-0 bottom-0 -z-10 pointer-events-none">
-          {/* Progressive Blur Layers to prevent ghostly opacity and hard cuts */}
-          <div className="absolute inset-0 backdrop-blur-[1px]" style={{ maskImage: 'linear-gradient(to bottom, transparent 0px, black 10px, black 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 0px, black 10px, black 100%)' }} />
-          <div className="absolute inset-0 backdrop-blur-[2px]" style={{ maskImage: 'linear-gradient(to bottom, transparent 10px, black 20px, black 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 10px, black 20px, black 100%)' }} />
-          <div className="absolute inset-0 backdrop-blur-[4px]" style={{ maskImage: 'linear-gradient(to bottom, transparent 20px, black 30px, black 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 20px, black 30px, black 100%)' }} />
-          <div className="absolute inset-0 backdrop-blur-[8px]" style={{ maskImage: 'linear-gradient(to bottom, transparent 30px, black 40px, black 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 30px, black 40px, black 100%)' }} />
-          <div className="absolute inset-0 backdrop-blur-[10px]" style={{ maskImage: 'linear-gradient(to bottom, transparent 40px, black 50px, black 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 40px, black 50px, black 100%)' }} />
-          <div className="absolute inset-0 backdrop-blur-[16px]" style={{ maskImage: 'linear-gradient(to bottom, transparent 50px, black 60px, black 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 50px, black 60px, black 100%)' }} />
+          {/* Single Blur Layer to prevent GPU flashing */}
+          <div className="absolute inset-0 backdrop-blur-md" style={{ maskImage: 'linear-gradient(to bottom, transparent 0px, black 40px, black 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 0px, black 40px, black 100%)' }} />
           
           {/* Background Color Gradient */}
           <div 
@@ -658,6 +678,11 @@ const ChatInputArea = React.memo(({
             }}
           />
         </div>
+      ) : (
+        <div className={cn(
+          "absolute inset-0 -z-10 backdrop-blur-xl pointer-events-none transition-colors duration-500",
+          darkMode ? "bg-black/60" : "bg-white/60"
+        )} />
       )}
 
       {/* Drag overlay */}
@@ -923,6 +948,7 @@ export default function App() {
   }, []);
   const [selectedModel, setSelectedModel] = useState("gemini-3-flash-preview");
   const [isMobile, setIsMobile] = useState(false);
+  const [isLandscape, setIsLandscape] = useState(false);
   const [activeTab, setActiveTab] = useState<"chat" | "preview">("chat");
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [confirmAction, setConfirmAction] = useState<{ message: string, action: () => void } | null>(null);
@@ -930,7 +956,7 @@ export default function App() {
   const [copiedFormat, setCopiedFormat] = useState<any>(null);
   const [isFormatPainterActive, setIsFormatPainterActive] = useState(false);
   const [isInputExpanded, setIsInputExpanded] = useState(false);
-  const [activeDropdown, setActiveDropdown] = useState<'font' | 'align' | 'list' | 'color' | null>(null);
+  const [activeDropdown, setActiveDropdown] = useState<'font' | 'align' | 'list' | 'color' | 'more' | 'fontFamily' | 'fontSize' | null>(null);
   const [isAgentMode, setIsAgentMode] = useState(false);
   const [agentState, setAgentState] = useState<{
     isActive: boolean;
@@ -1093,6 +1119,7 @@ export default function App() {
   useEffect(() => {
     const checkMobile = () => {
       setIsMobile(window.innerWidth < 768);
+      setIsLandscape(window.innerWidth > window.innerHeight);
       if (window.innerWidth >= 768) {
         setSidebarOpen(true);
       }
@@ -1118,14 +1145,23 @@ export default function App() {
     return () => clearTimeout(timer);
   }, []);
 
+  // Helper to get or initialize AI
+  const getAi = useCallback(() => {
+    if (aiRef.current) return aiRef.current;
+    
+    // Attempt to initialize AI
+    if (process.env.GEMINI_API_KEY) {
+      console.log("Lazy initializing AI with API Key...");
+      aiRef.current = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      return aiRef.current;
+    }
+    return null;
+  }, []);
+
   // Initialize AI
   useEffect(() => {
-    const apiKey = process.env.GEMINI_API_KEY;
-    console.log("Initializing AI with API Key:", apiKey ? "FOUND (starts with " + apiKey.substring(0, 4) + "...)" : "NOT FOUND");
-    if (apiKey) {
-      aiRef.current = new GoogleGenAI({ apiKey });
-    }
-  }, []);
+    getAi();
+  }, [getAi]);
 
   // Auth Listener
   useEffect(() => {
@@ -1407,15 +1443,56 @@ export default function App() {
     e.target.value = '';
   };
 
-  const handleSendMessage = async (promptToUse: string, attachments: ChatAttachment[] = [], isRetry: boolean = false) => {
+  const preprocessJson = (str: string) => {
+    // Aggressively escape backslashes that look like LaTeX but might be valid/invalid JSON escapes
+    const preProcessed = str.replace(/\\(["\\\/bfnrt]|u[0-9a-fA-F]{4}|[^"\\\/bfnrtu])/g, (match) => {
+      // Keep intentional JSON escapes like \n, \", \\, \/
+      if (match.match(/^\\(["\\\/nu])/)) return match;
+      // Double-escape everything else (\f, \b, \t, etc.) to preserve it for LaTeX
+      return '\\' + match;
+    });
+    
+    // Also handle literal control characters that might have sneaked in
+    return preProcessed
+      .replace(/\x0C/g, '\\f')
+      .replace(/\x0B/g, '\\v')
+      .replace(/\x08/g, '\\b')
+      .replace(/\x0D/g, '\\r')
+      .replace(/\x09/g, '\\t');
+  };
+
+  const sanitizeObject = (obj: any): any => {
+    if (typeof obj === 'string') {
+      return obj
+        .replace(/\x0C/g, '\\f')
+        .replace(/\x0B/g, '\\v')
+        .replace(/\x08/g, '\\b')
+        .replace(/\x0D/g, '\\r')
+        .replace(/\x09/g, '\\t');
+    }
+    if (Array.isArray(obj)) {
+      return obj.map(sanitizeObject);
+    }
+    if (obj !== null && typeof obj === 'object') {
+      const sanitized: any = {};
+      for (const key in obj) {
+        sanitized[key] = sanitizeObject(obj[key]);
+      }
+      return sanitized;
+    }
+    return obj;
+  };
+
+const handleSendMessage = async (promptToUse: string, attachments: ChatAttachment[] = [], isRetry: boolean = false) => {
     console.log("handleSendMessage called", { promptToUse, attachmentsCount: attachments.length, isRetry });
     if ((!promptToUse.trim() && attachments.length === 0) || isCurrentSessionLoading) return;
 
-    if (!aiRef.current) {
+    const ai = getAi();
+    if (!ai) {
       console.error("AI Assistant not initialized. aiRef.current is null.");
       const errorMessage: ChatMessage = { 
         role: "model", 
-        text: "❌ AI Assistant is not initialized. Please check if the API key is configured correctly in the environment.",
+        text: "❌ AI Assistant is not initialized. Please ensure your GEMINI_API_KEY is configured correctly in the AI Studio Settings (Secrets) and refresh the page.",
         isError: true 
       };
       setMessages(prev => [...prev, errorMessage]);
@@ -1571,8 +1648,13 @@ export default function App() {
       // The main document is uploaded via the central button.
       // Attachments are treated as reference materials.
 
-      const userRequestText = promptToUse.trim() || (attachments.length > 0 ? "请处理我上传的文件并根据其内容更新文档。" : "");
+        const userRequestText = promptToUse.trim() || (attachments.length > 0 ? "请处理我上传的文件并根据其内容更新文档。" : "");
       
+      const attachmentContextText = attachments.length > 0 
+        ? `\n\n【用户上传的附件信息】\n系统识别到用户上传了 ${attachments.length} 个文件。在执行任务时，你必须仔细阅读并提取附件中的核心内容（如逐字录入、大纲提取等），不要忽略附件。\n请结合以下附件进行操作：\n` + 
+          attachments.map(a => `- ${a.name} (${a.type})`).join("\n") + "\n\n"
+        : "";
+
       if (isAgentMode) {
         agentCancelRef.current = false;
         // --- PHASE 1: PLANNER ---
@@ -1622,7 +1704,7 @@ Example: ["Write a detailed Introduction and Background", "Develop the first mai
                 });
                 return parts;
               })),
-              { text: outlinePrompt }
+              { text: attachmentContextText + outlinePrompt }
             ]
           }
         ];
@@ -1632,12 +1714,14 @@ Example: ["Write a detailed Introduction and Background", "Develop the first mai
         const maxOutlineRetries = 3;
         while (outlineRetries < maxOutlineRetries) {
           try {
-            outlineResponse = await aiRef.current.models.generateContent({
+            // Use standard request format for better compatibility
+            outlineResponse = await ai.models.generateContent({
               model: selectedModel,
               contents: outlineContents as any,
               config: {
-                responseMimeType: "application/json",
-                ...(selectedModel === "gemini-3.1-pro-preview" ? { thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH } } : {}),
+                // responseMimeType: "application/json" can sometimes cause 403 on restricted accounts/models
+                // Prefer parsing it from the text if it fails or just be safe
+                temperature: 0.1,
               }
             });
             break;
@@ -1646,9 +1730,22 @@ Example: ["Write a detailed Introduction and Background", "Develop the first mai
               outlineRetries++;
               const delay = Math.pow(2, outlineRetries) * 1000;
               await new Promise(resolve => setTimeout(resolve, delay));
+            } else if (error.status === 403) {
+              // Try without responseMimeType if 403 occurs, just in case
+              console.warn("403 error on outline generation, retrying with simpler config...");
+              try {
+            outlineResponse = await ai.models.generateContent({
+                  model: selectedModel,
+                  contents: outlineContents as any,
+                });
+                break;
+              } catch (innerError) {
+                console.error("Failed even with simple config:", innerError);
+                throw innerError;
+              }
             } else {
               console.error("Failed to generate outline:", error);
-              throw error; // Let the outer catch block handle it
+              throw error; 
             }
           }
         }
@@ -1730,7 +1827,7 @@ CRITICAL INSTRUCTIONS:
                   });
                   return parts;
                 })),
-                { text: taskPrompt }
+                { text: attachmentContextText + taskPrompt }
               ]
             }
           ];
@@ -1740,12 +1837,11 @@ CRITICAL INSTRUCTIONS:
           const maxRetries = 3;
           while (retries < maxRetries) {
             try {
-              taskResponseStream = await aiRef.current.models.generateContentStream({
+              taskResponseStream = await ai.models.generateContentStream({
                 model: selectedModel,
                 contents: taskContents as any,
                 config: {
                   systemInstruction: SYSTEM_INSTRUCTION,
-                  ...(selectedModel === "gemini-3.1-pro-preview" ? { thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH } } : {}),
                 }
               });
               break;
@@ -1774,7 +1870,7 @@ CRITICAL INSTRUCTIONS:
             const jsonMatch = taskText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
             if (jsonMatch) {
               explanation = taskText.substring(0, jsonMatch.index).trim();
-              const jsonStr = jsonMatch[1];
+              const jsonStr = preprocessJson(jsonMatch[1]);
               const parsed = JSON.parse(jsonStr);
               loopDocState = applyUpdate(parsed, loopDocState);
               
@@ -1867,7 +1963,7 @@ CRITICAL INSTRUCTIONS:
                 });
                 return parts;
               })),
-              { text: contextPrompt }
+              { text: attachmentContextText + contextPrompt }
             ]
           }
         ];
@@ -1878,12 +1974,11 @@ CRITICAL INSTRUCTIONS:
       
       while (retries < maxRetries) {
         try {
-          responseStream = await aiRef.current.models.generateContentStream({
+          responseStream = await ai.models.generateContentStream({
             model: selectedModel,
             contents,
             config: {
               systemInstruction: SYSTEM_INSTRUCTION,
-              ...(selectedModel === "gemini-3.1-pro-preview" ? { thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH } } : {}),
             }
           });
           break;
@@ -1980,11 +2075,12 @@ CRITICAL INSTRUCTIONS:
       let finalJson = "";
 
       if (jsonMatch) {
-        let jsonStr = jsonMatch[1].trim();
+        let jsonStr = preprocessJson(jsonMatch[1].trim());
         
         finalJson = jsonStr;
         try {
-          const update = JSON.parse(jsonStr);
+          let update = JSON.parse(jsonStr);
+          update = sanitizeObject(update);
           const nextState = applyUpdate(update, currentDocState);
           if (nextState) finalDocState = nextState;
           if (activeSessionIdRef.current === sessionId) {
@@ -2001,7 +2097,8 @@ CRITICAL INSTRUCTIONS:
             const fixedJson = jsonStr
               .replace(/([{,]\s*)([a-zA-Z0-9_]+)\s*:/g, '$1"$2":')
               .replace(/:\s*'([^']*)'/g, ': "$1"');
-            const update = JSON.parse(fixedJson);
+            let update = JSON.parse(preprocessJson(fixedJson));
+            update = sanitizeObject(update);
             const nextState = applyUpdate(update, currentDocState);
             if (nextState) finalDocState = nextState;
             finalJson = fixedJson;
@@ -2141,20 +2238,120 @@ CRITICAL INSTRUCTIONS:
     });
   };
 
-  const updateFocusedBlock = (updates: any) => {
-    if (!focusedBlock) return;
+  const updateFocusedBlock = (updates: any, targetSIdx?: number, targetPIdx?: number) => {
+    const focusS = targetSIdx !== undefined ? targetSIdx : focusedBlock?.s;
+    const focusP = targetPIdx !== undefined ? targetPIdx : focusedBlock?.p;
+
+    if (focusS === undefined || focusP === undefined) return;
+
+    // ----- Check Text Selection First -----
+    let partialSelection: any = null;
+    try {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+        const anchor = sel.anchorNode;
+        const focus = sel.focusNode;
+        // Basic implementation: if selection is fully within the same DOM node
+        if (anchor && focus && anchor.textContent && anchor === focus) {
+          let start = sel.anchorOffset;
+          let end = sel.focusOffset;
+          if (start > end) { const t = start; start = end; end = t; }
+          
+          let el = anchor.parentElement;
+          while (el && !el.getAttribute('data-ridx') && !el.getAttribute('data-pidx') && el.tagName !== 'BODY') {
+            el = el.parentElement;
+          }
+          if (el) {
+            const rIdxStr = el.getAttribute('data-ridx');
+            const pIdxStr = el.getAttribute('data-pidx');
+            const sIdxStr = el.getAttribute('data-sidx');
+            if (pIdxStr === String(focusP) && sIdxStr === String(focusS)) {
+              partialSelection = {
+                rIdx: parseInt(rIdxStr || '-1'),
+                start,
+                end,
+                textLen: anchor.textContent.length
+              };
+            }
+          }
+        }
+      }
+    } catch(e) {}
+
     setDocState(prev => {
       const next = JSON.parse(JSON.stringify(prev));
-      const section = next.sections[focusedBlock.s];
-      const p = section.paragraphs[focusedBlock.p];
+      const section = next.sections[focusS];
+      const p = section.paragraphs[focusP];
       
       if (p.type === 'table') return prev;
 
+      const hasInlineUpdates = ('isBold' in updates || 'isItalic' in updates || 'color' in updates || 'fontFamily' in updates || 'fontSize' in updates);
+
+      if (partialSelection && hasInlineUpdates) {
+        if (!p.runs && p.text) {
+          p.runs = [{ text: p.text, isBold: p.isBold, isItalic: p.isItalic, color: p.color, fontFamily: p.fontFamily, fontSize: p.fontSize }];
+          p.text = undefined;
+          partialSelection.rIdx = 0;
+        }
+
+        if (p.runs && partialSelection.rIdx >= 0 && partialSelection.rIdx < p.runs.length) {
+          const run = p.runs[partialSelection.rIdx];
+          const { start, end } = partialSelection;
+          
+          if (start !== end) { // Only slice if there's actual text selected
+            const beforeText = run.text.substring(0, start);
+            const midText = run.text.substring(start, end);
+            const afterText = run.text.substring(end);
+            
+            const newRuns = [];
+            if (beforeText) newRuns.push({ ...run, text: beforeText });
+            
+            const midRun = { ...run, text: midText };
+            for (const key in updates) {
+              if (['isBold', 'isItalic', 'color', 'fontFamily', 'fontSize'].includes(key)) {
+                if (updates[key] === 'toggle') {
+                  midRun[key] = !run[key];
+                } else if (updates[key] !== undefined) {
+                  midRun[key] = updates[key];
+                }
+              }
+            }
+            newRuns.push(midRun);
+            
+            if (afterText) newRuns.push({ ...run, text: afterText });
+            
+            p.runs.splice(partialSelection.rIdx, 1, ...newRuns);
+            
+            saveCurrentDoc(next);
+            pushToHistory(next);
+            return next;
+          }
+        }
+      }
+
+      // If we reach here, apply to the block/paragraph
       for (const key in updates) {
-        if (['isBold', 'isItalic'].includes(key)) {
-          (p as any)[key] = !(p as any)[key];
+        if (updates[key] === undefined) continue;
+        
+        if (['isBold', 'isItalic', 'color', 'fontFamily', 'fontSize'].includes(key)) {
+          if (updates[key] === 'toggle') {
+            (p as any)[key] = !(p as any)[key];
+            if (p.runs) {
+              p.runs.forEach((r: any) => { r[key] = !r[key]; });
+            }
+          } else {
+             (p as any)[key] = updates[key];
+             if (p.runs) {
+               p.runs.forEach((r: any) => { r[key] = updates[key]; });
+             }
+          }
         } else if (['isBullet', 'isNumbering'].includes(key)) {
-          const newVal = !(p as any)[key];
+          let newVal;
+          if (updates[key] === 'toggle') {
+            newVal = !(p as any)[key];
+          } else {
+            newVal = updates[key];
+          }
           (p as any)[key] = newVal;
           if (newVal) {
             const other = key === 'isBullet' ? 'isNumbering' : 'isBullet';
@@ -2174,48 +2371,72 @@ CRITICAL INSTRUCTIONS:
   const handleFormatPainterClick = () => {
     if (!focusedBlock) return;
     
-    if (isFormatPainterActive) {
-      // Turn off
+    if (isFormatPainterActive && copiedFormat) {
+      // Apply mode: Apply copied format to CURRENT focused block / selection
+      updateFocusedBlock({
+        isBold: copiedFormat.isBold,
+        isItalic: copiedFormat.isItalic,
+        color: copiedFormat.color,
+        fontFamily: copiedFormat.fontFamily,
+        fontSize: copiedFormat.fontSize,
+        alignment: copiedFormat.alignment,
+        isHeading: copiedFormat.isHeading,
+        headingLevel: copiedFormat.headingLevel,
+        isBullet: copiedFormat.isBullet,
+        isNumbering: copiedFormat.isNumbering
+      });
+      // Reset format painter
       setIsFormatPainterActive(false);
       setCopiedFormat(null);
     } else {
-      // Turn on and copy format
-      const p = docState.sections[focusedBlock.s].paragraphs[focusedBlock.p];
+      // Copy mode: Copy format from CURRENT focused block / selection
+      const section = docState.sections[focusedBlock.s];
+      const p = section.paragraphs[focusedBlock.p];
       if (p.type === 'table') return;
       const para = p as DocParagraph;
-      setCopiedFormat({
+      
+      // Try to copy from selected run if available, otherwise from whole paragraph
+      let formatToCopy: any = {
         isBold: para.isBold,
         isItalic: para.isItalic,
         color: para.color,
         fontFamily: para.fontFamily,
+        fontSize: para.fontSize,
         alignment: para.alignment,
         isHeading: para.isHeading,
         headingLevel: para.headingLevel,
         isBullet: para.isBullet,
         isNumbering: para.isNumbering
-      });
+      };
+      
+      try {
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount > 0 && !sel.isCollapsed && para.runs) {
+          const anchor = sel.anchorNode;
+          let el = anchor?.parentElement;
+          while (el && !el.getAttribute('data-ridx') && el.tagName !== 'BODY') {
+            el = el.parentElement;
+          }
+          if (el) {
+            const rIdx = parseInt(el.getAttribute('data-ridx') || '-1');
+            if (rIdx >= 0 && rIdx < para.runs.length) {
+               const run = para.runs[rIdx];
+               formatToCopy = {
+                 ...formatToCopy,
+                 isBold: run.isBold,
+                 isItalic: run.isItalic,
+                 color: run.color,
+                 fontFamily: run.fontFamily,
+                 fontSize: run.fontSize
+               };
+            }
+          }
+        }
+      } catch(e) {}
+
+      setCopiedFormat(formatToCopy);
       setIsFormatPainterActive(true);
     }
-  };
-
-  const applyFormatPainter = (sIdx: number, pIdx: number) => {
-    if (!isFormatPainterActive || !copiedFormat) return;
-    
-    setDocState(prev => {
-      const next = JSON.parse(JSON.stringify(prev));
-      const p = next.sections[sIdx].paragraphs[pIdx];
-      
-      // Apply copied format
-      Object.assign(p, copiedFormat);
-      
-      saveCurrentDoc(next);
-      pushToHistory(next);
-      return next;
-    });
-    
-    // Turn off after one use (standard format painter behavior)
-    setIsFormatPainterActive(false);
-    setCopiedFormat(null);
   };
 
   const deleteFocusedBlock = () => {
@@ -2408,20 +2629,37 @@ CRITICAL INSTRUCTIONS:
     });
   };
 
-const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }: any) => {
-  const hasMath = text?.includes('$');
+const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, "data-sidx": sIdx, "data-pidx": pIdx, "data-ridx": rIdx }: any) => {
+  if (!text) return null;
   
-  if (hasMath && !isFocused) {
+  // Fix common AI escaping issues (e.g., \f becoming form feed)
+  const processedText = typeof text === 'string' 
+    ? text.replace(/\x0C/g, '\\f')
+          .replace(/\x0B/g, '\\v')
+          .replace(/\x08/g, '\\b')
+          .replace(/\x0D/g, '\\r')
+          .replace(/\x09/g, '\\t')
+    : text;
+
+  // Broad math detection: contains $, OR starts with \ + command, OR has multiple LaTeX commands
+  const hasMathIndicators = processedText?.includes('$') || 
+                  /\\(?:frac|sqrt|sum|alpha|beta|gamma|Delta|theta|pi|infty|int|partial|nabla|times|div|pm|mp|le|ge|ne|approx|equiv)/.test(processedText) ||
+                  (/^\\[a-zA-Z]+/.test(processedText.trim()) && processedText.includes('{'));
+  
+  if (hasMathIndicators && !isFocused) {
+    // If it has LaTeX but no $, wrap it in $$ for rendering
+    const renderText = (processedText.includes('$')) ? processedText : `$$${processedText}$$`;
+    
     return (
-      <span className={cn("inline-block", className)} style={style}>
+      <span className={cn("inline-block", className)} style={style} data-sidx={sIdx} data-pidx={pIdx} data-ridx={rIdx}>
         <Markdown 
           remarkPlugins={[remarkMath]} 
-          rehypePlugins={[rehypeKatex]}
+          rehypePlugins={[[rehypeKatex, { strict: false }]]}
           components={{
-            p: ({ children }: any) => <span className="inline">{children}</span>
+            p: ({ children }: any) => <span className="inline-block">{children}</span>
           }}
         >
-          {text}
+          {renderText}
         </Markdown>
       </span>
     );
@@ -2434,8 +2672,11 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
       onBlur={onBlur}
       className={className}
       style={style}
+      data-sidx={sIdx}
+      data-pidx={pIdx}
+      data-ridx={rIdx}
     >
-      {text}
+      {processedText}
     </span>
   );
 };
@@ -2463,7 +2704,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                   <div key={pIdx} className="overflow-x-auto my-4">
                     <table 
                       className={cn(
-                        "w-full border-collapse",
+                        "w-full border-collapse relative z-10",
                         table.border && "border border-gray-300"
                       )}
                       style={{ width: table.width || '100%' }}
@@ -2545,7 +2786,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                 }[img.alignment || "center"];
                 
                 return (
-                  <div key={pIdx} className={cn("flex w-full my-4", alignmentClass)}>
+                  <div key={pIdx} className={cn("flex w-full my-4 relative z-10", alignmentClass)}>
                     <figure className="max-w-full flex flex-col items-center">
                       <img 
                         src={resolveImageUrl(img.src, img.alt)} 
@@ -2577,12 +2818,11 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
               const isFocused = focusedBlock?.s === sIdx && focusedBlock?.p === pIdx;
               const focusClass = isFocused ? "ring-2 ring-blue-400/50 rounded bg-blue-50/30" : "border border-transparent hover:border-gray-200 rounded";
 
-              const handleBlockClick = () => {
-                if (isFormatPainterActive) {
-                  applyFormatPainter(sIdx, pIdx);
-                } else {
-                  setFocusedBlock({s: sIdx, p: pIdx});
-                }
+              const handleBlockClick = (e: React.MouseEvent) => {
+                // Avoid redundant state updates which can disrupt focus on mobile
+                if (focusedBlock?.s === sIdx && focusedBlock?.p === pIdx) return;
+                
+                setFocusedBlock({s: sIdx, p: pIdx});
               };
 
               if (para.isHeading) {
@@ -2605,6 +2845,9 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                       <MathText
                         key={i}
                         text={r.text}
+                        data-sidx={sIdx}
+                        data-pidx={pIdx}
+                        data-ridx={i}
                         style={{ color: r.color, fontFamily: r.fontFamily, fontSize: r.fontSize }}
                         className={cn(
                           r.isBold && "font-bold",
@@ -2622,6 +2865,9 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                   return (
                     <MathText
                       text={para.text}
+                      data-sidx={sIdx}
+                      data-pidx={pIdx}
+                      data-ridx={-1}
                       contentEditable
                       onBlur={(e: any) => handleTextEdit(sIdx, pIdx, -1, e.currentTarget.textContent)}
                       className="outline-none block min-h-[1.2em]"
@@ -2631,22 +2877,23 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                 };
 
                 switch (level) {
-                  case 1: return <h1 key={pIdx} onClick={handleBlockClick} className={className} style={style}>{renderHeadingContent()}</h1>;
-                  case 2: return <h2 key={pIdx} onClick={handleBlockClick} className={className} style={style}>{renderHeadingContent()}</h2>;
-                  case 3: return <h3 key={pIdx} onClick={handleBlockClick} className={className} style={style}>{renderHeadingContent()}</h3>;
-                  case 4: return <h4 key={pIdx} onClick={handleBlockClick} className={className} style={style}>{renderHeadingContent()}</h4>;
-                  case 5: return <h5 key={pIdx} onClick={handleBlockClick} className={className} style={style}>{renderHeadingContent()}</h5>;
-                  case 6: return <h6 key={pIdx} onClick={handleBlockClick} className={className} style={style}>{renderHeadingContent()}</h6>;
-                  default: return <h1 key={pIdx} onClick={handleBlockClick} className={className} style={style}>{renderHeadingContent()}</h1>;
+                  case 1: return <h1 key={pIdx} onMouseUp={handleBlockClick} onClick={handleBlockClick} className={cn(className, "relative z-10")} style={style}>{renderHeadingContent()}</h1>;
+                  case 2: return <h2 key={pIdx} onMouseUp={handleBlockClick} onClick={handleBlockClick} className={cn(className, "relative z-10")} style={style}>{renderHeadingContent()}</h2>;
+                  case 3: return <h3 key={pIdx} onMouseUp={handleBlockClick} onClick={handleBlockClick} className={cn(className, "relative z-10")} style={style}>{renderHeadingContent()}</h3>;
+                  case 4: return <h4 key={pIdx} onMouseUp={handleBlockClick} onClick={handleBlockClick} className={cn(className, "relative z-10")} style={style}>{renderHeadingContent()}</h4>;
+                  case 5: return <h5 key={pIdx} onMouseUp={handleBlockClick} onClick={handleBlockClick} className={cn(className, "relative z-10")} style={style}>{renderHeadingContent()}</h5>;
+                  case 6: return <h6 key={pIdx} onMouseUp={handleBlockClick} onClick={handleBlockClick} className={cn(className, "relative z-10")} style={style}>{renderHeadingContent()}</h6>;
+                  default: return <h1 key={pIdx} onMouseUp={handleBlockClick} onClick={handleBlockClick} className={cn(className, "relative z-10")} style={style}>{renderHeadingContent()}</h1>;
                 }
               }
 
               return (
                 <div 
                   key={pIdx} 
+                  onMouseUp={handleBlockClick}
                   onClick={handleBlockClick}
                   className={cn(
-                    "flex items-start gap-3 p-1 transition-all",
+                    "flex items-start gap-3 relative z-10 p-1 transition-all",
                     alignmentClass,
                     focusClass,
                     para.isBullet && "pl-6",
@@ -2661,7 +2908,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                       {section.paragraphs.slice(0, pIdx + 1).filter(prev => prev.type !== 'table' && (prev as DocParagraph).isNumbering).length}.
                     </span>
                   )}
-                  <p 
+                  <div 
                     className={cn(
                       "leading-[1.5] flex-1 outline-none",
                       !para.fontSize && "text-[11pt]",
@@ -2677,6 +2924,9 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                           key={rIdx}
                           text={run.text}
                           contentEditable
+                          data-sidx={sIdx}
+                          data-pidx={pIdx}
+                          data-ridx={rIdx}
                           onBlur={(e: any) => handleTextEdit(sIdx, pIdx, rIdx, e.currentTarget.textContent)}
                           className={cn(
                             "outline-none",
@@ -2693,6 +2943,9 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                       <MathText
                         text={para.text}
                         contentEditable
+                        data-sidx={sIdx}
+                        data-pidx={pIdx}
+                        data-ridx={-1}
                         onBlur={(e: any) => handleTextEdit(sIdx, pIdx, -1, e.currentTarget.textContent)}
                         className={cn(
                           "outline-none block min-h-[1.2em]",
@@ -2702,7 +2955,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                         isFocused={isFocused}
                       />
                     )}
-                  </p>
+                  </div>
                 </div>
               );
             })}
@@ -2812,7 +3065,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
           animate={{ opacity: 1 }}
           transition={{ duration: 1 }}
           className={cn(
-            "flex flex-col h-screen overflow-hidden transition-colors duration-700 relative",
+            "flex flex-col h-screen overflow-hidden relative",
             darkMode ? "text-[#E0E0E0] dark" : "text-[#202124]"
           )}
         >
@@ -2853,47 +3106,25 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
       )}>
         <div className={cn(
           "absolute -top-[10%] -left-[5%] w-[60%] h-[60%] rounded-full filter blur-[120px] animate-blob",
-          darkMode ? "bg-indigo-600/40 opacity-70 mix-blend-screen" : "bg-blue-300/60 opacity-90 mix-blend-soft-light"
+          darkMode ? "bg-indigo-600/40 opacity-70" : "bg-blue-300/60 opacity-90"
         )} style={{ animationDuration: '8s' }} />
         <div className={cn(
           "absolute top-[15%] -right-[5%] w-[50%] h-[70%] rounded-full filter blur-[120px] animate-blob",
-          darkMode ? "bg-purple-600/40 opacity-70 mix-blend-screen" : "bg-purple-300/60 opacity-90 mix-blend-soft-light"
+          darkMode ? "bg-purple-600/40 opacity-70" : "bg-purple-300/60 opacity-90"
         )} style={{ animationDuration: '12s', animationDelay: '2s' }} />
         <div className={cn(
           "absolute -bottom-[15%] left-[15%] w-[70%] h-[60%] rounded-full filter blur-[120px] animate-blob",
-          darkMode ? "bg-blue-600/40 opacity-70 mix-blend-screen" : "bg-indigo-300/60 opacity-90 mix-blend-soft-light"
+          darkMode ? "bg-blue-600/40 opacity-70" : "bg-indigo-300/60 opacity-90"
         )} style={{ animationDuration: '10s', animationDelay: '4s' }} />
         {/* Brighter Light Blobs */}
         <div className={cn(
           "absolute top-[30%] left-[20%] w-[40%] h-[40%] rounded-full filter blur-[100px] animate-blob",
-          darkMode ? "bg-blue-400/30 opacity-50 mix-blend-screen" : "bg-white/100 opacity-100 mix-blend-normal shadow-[0_0_100px_rgba(255,255,255,0.5)]"
+          darkMode ? "bg-blue-400/30 opacity-50" : "bg-white/100 opacity-100 shadow-[0_0_100px_rgba(255,255,255,0.5)]"
         )} style={{ animationDuration: '15s', animationDelay: '1s' }} />
       </div>
 
-      {/* Global Header */}
-      <header className="absolute top-0 left-0 right-0 z-50 flex flex-col pointer-events-none">
-        {/* Seamless Progressive Gradient Blur Background for ENTIRE Header */}
-        <div className="absolute inset-x-0 top-0 h-40 pointer-events-none z-0">
-          <div className="absolute inset-0 backdrop-blur-[1px]" style={{ maskImage: 'linear-gradient(to bottom, black 0px, black 100px, transparent 140px)', WebkitMaskImage: 'linear-gradient(to bottom, black 0px, black 100px, transparent 140px)' }} />
-          <div className="absolute inset-0 backdrop-blur-[2px]" style={{ maskImage: 'linear-gradient(to bottom, black 0px, black 90px, transparent 130px)', WebkitMaskImage: 'linear-gradient(to bottom, black 0px, black 90px, transparent 130px)' }} />
-          <div className="absolute inset-0 backdrop-blur-[4px]" style={{ maskImage: 'linear-gradient(to bottom, black 0px, black 80px, transparent 120px)', WebkitMaskImage: 'linear-gradient(to bottom, black 0px, black 80px, transparent 120px)' }} />
-          <div className="absolute inset-0 backdrop-blur-[8px]" style={{ maskImage: 'linear-gradient(to bottom, black 0px, black 70px, transparent 110px)', WebkitMaskImage: 'linear-gradient(to bottom, black 0px, black 70px, transparent 110px)' }} />
-          <div className="absolute inset-0 backdrop-blur-[12px]" style={{ maskImage: 'linear-gradient(to bottom, black 0px, black 60px, transparent 100px)', WebkitMaskImage: 'linear-gradient(to bottom, black 0px, black 60px, transparent 100px)' }} />
-          <div className="absolute inset-0 backdrop-blur-[16px]" style={{ maskImage: 'linear-gradient(to bottom, black 0px, black 50px, transparent 90px)', WebkitMaskImage: 'linear-gradient(to bottom, black 0px, black 50px, transparent 90px)' }} />
-          
-          <div 
-            className={cn(
-              "absolute inset-0 transition-colors duration-500",
-              darkMode ? "bg-black/30" : "bg-white/40",
-              isAgentMode && (darkMode ? "bg-black/20" : "bg-white/30")
-            )}
-            style={{
-              maskImage: 'linear-gradient(to bottom, black 0px, black 80px, transparent 140px)',
-              WebkitMaskImage: 'linear-gradient(to bottom, black 0px, black 80px, transparent 140px)',
-            }}
-          />
-        </div>
-
+      {/* Global Header - Top Bar Only */}
+      <header className="absolute top-0 left-0 right-0 z-[100] flex flex-col pointer-events-none">
         {/* Top Bar - Transparent Background */}
         <div className={cn(
           "flex items-center justify-between px-4 py-2 transition-colors duration-500 pointer-events-auto relative z-40",
@@ -3100,7 +3331,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
             <button 
               onClick={() => setActiveTab("chat")}
               className={cn(
-                "flex items-center gap-2 px-6 py-1.5 rounded-full text-xs font-medium transition-all duration-300",
+                "flex items-center gap-1 sm:gap-2 px-4 sm:px-6 py-1.5 rounded-full text-xs font-medium transition-all duration-300",
                 activeTab === "chat" 
                   ? (darkMode ? "bg-blue-600 text-white shadow-lg shadow-blue-900/20" : "bg-blue-600 text-white shadow-lg shadow-blue-200/50") 
                   : (darkMode ? "text-gray-400 hover:text-white" : "text-gray-500 hover:text-gray-900")
@@ -3112,7 +3343,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
             <button 
               onClick={() => setActiveTab("preview")}
               className={cn(
-                "flex items-center gap-2 px-6 py-1.5 rounded-full text-xs font-medium transition-all duration-300",
+                "flex items-center gap-1 sm:gap-2 px-4 sm:px-6 py-1.5 rounded-full text-xs font-medium transition-all duration-300",
                 activeTab === "preview" 
                   ? (darkMode ? "bg-blue-600 text-white shadow-lg shadow-blue-900/20" : "bg-blue-600 text-white shadow-lg shadow-blue-200/50") 
                   : (darkMode ? "text-gray-400 hover:text-white" : "text-gray-500 hover:text-gray-900")
@@ -3132,11 +3363,18 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
         {/* Removed from here, moved into header */}
       </div>
 
-      <div className="flex flex-1 overflow-hidden relative z-10">
+      <div className={cn(
+        "flex flex-1 overflow-hidden relative transition-all duration-500", 
+        isInputExpanded ? "fixed inset-0 z-[100]" : "z-10"
+      )}>
         {/* Sidebar - Chat Interface */}
         <motion.div 
           initial={false}
-          animate={isMobile ? {
+          animate={isInputExpanded ? {
+            x: 0,
+            width: "100vw",
+            opacity: 1
+          } : (isMobile ? {
             x: activeTab === "chat" ? 0 : "-100vw",
             opacity: activeTab === "chat" ? 1 : 0,
             width: "100vw"
@@ -3144,14 +3382,14 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
             width: sidebarOpen ? "450px" : "0px",
             opacity: 1,
             x: 0
-          }}
+          })}
           transition={{ type: "spring", bounce: 0, duration: 0.4 }}
           className={cn(
             "flex flex-col border-r relative z-10 transition-colors duration-500 overflow-hidden shrink-0 transform-gpu",
             darkMode ? "border-white/5 bg-transparent" : "border-black/5 bg-transparent shadow-[4px_0_24px_rgba(0,0,0,0.02)]",
             (!sidebarOpen && !isMobile) && "border-none",
-            isMobile && "absolute top-0 left-0 w-full h-full z-50 bg-transparent",
-            isMobile && activeTab !== "chat" && "pointer-events-none"
+            (isMobile || isInputExpanded) && "absolute top-0 left-0 w-full h-full z-50 bg-transparent",
+            (isMobile && activeTab !== "chat" && !isInputExpanded) && "pointer-events-none"
           )}
         >
           {/* Sidebar Background to avoid nested backdrop-filter bug */}
@@ -3169,7 +3407,10 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
         <div className={cn(
           "flex flex-col h-full relative z-10 w-full"
         )}>
-          <div className="absolute inset-0 overflow-y-auto custom-scrollbar pt-[110px] md:pt-[60px] pb-[200px]">
+          {/* Chat Side Blur */}
+          <TopBlur darkMode={darkMode} isAgentMode={isAgentMode} />
+
+          <div className="flex-1 overflow-y-auto custom-scrollbar pt-[120px] md:pt-[80px] pb-4 z-10 pointer-events-auto relative">
           <AnimatePresence>
             {showHistory ? (
               <motion.div 
@@ -3567,37 +3808,70 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
           isMobile && activeTab !== "preview" && "pointer-events-none"
         )}
       >
+        {/* Document Side Blur */}
+        <TopBlur darkMode={darkMode} isAgentMode={isAgentMode} />
+
         {/* Document Sandbox */}
         <div className={cn(
-          "absolute inset-0 overflow-y-auto p-4 md:p-12 pt-[90px] md:pt-[70px] custom-scrollbar transition-colors duration-500 z-10",
+          "flex-1 overflow-y-auto p-4 md:p-12 pt-[120px] md:pt-[80px] custom-scrollbar transition-colors duration-500 z-10 relative",
           "bg-transparent"
         )}>
           {/* Document Toolbar - Subheader */}
-          <div 
-            ref={toolbarRef}
-            className={cn(
-              "sticky top-[80px] md:top-[50px] z-30 min-h-10 py-1.5 flex flex-wrap justify-center items-center px-2 md:px-4 shrink-0 transition-all mb-6 rounded-xl shadow-2xl w-fit mx-auto",
-              darkMode ? "text-white" : "text-gray-900"
-            )}
-          >
-            {/* Background element with blur to avoid nested backdrop-filter bug on dropdowns */}
+          {!isInputExpanded && (
             <div className={cn(
-              "absolute inset-0 rounded-xl border -z-10 backdrop-blur-2xl pointer-events-none transform-gpu will-change-[backdrop-filter]",
-              darkMode ? "bg-black/30 border-white/10" : "bg-white/40 border-black/5"
-            )} />
+                "z-30 h-[44px] mb-6 flex justify-center w-full pointer-events-none",
+                (isMobile && !isLandscape) ? "sticky top-[60px]" : "sticky top-[5px]"
+            )}>
+              <div 
+                ref={toolbarRef}
+                onMouseDown={(e) => {
+                  const target = e.target as HTMLElement;
+                  if (!target.closest('select') && !target.closest('input')) {
+                    e.preventDefault();
+                  }
+                }}
+                className={cn(
+                  "absolute top-0 left-1/2 -translate-x-1/2 z-30 min-h-[44px] py-[6px] flex flex-col justify-start items-center px-2 md:px-4 shrink-0 shadow-sm rounded-2xl pointer-events-auto transform-gpu will-change-[height]",
+                  (isMobile && !isLandscape) 
+                    ? "w-max max-w-[96vw]" 
+                    : "w-max max-w-[95%]",
+                  darkMode ? "text-white" : "text-gray-900"
+                )}
+              >
+              {/* Background element with blur - stabilized rendering */}
+              <div className={cn(
+                "absolute inset-0 border -z-10 backdrop-blur-md pointer-events-none rounded-2xl transform-gpu",
+                darkMode ? "bg-black/20 border-white/10" : "bg-white/20 border-black/5"
+              )} />
             
-            <div className="flex flex-wrap items-center justify-center gap-0.5">
-              {(() => {
+            {(() => {
                 const p = focusedBlock ? docState.sections[focusedBlock.s].paragraphs[focusedBlock.p] : null;
                 const focusedPara = p && p.type !== 'table' ? p as DocParagraph : null;
                 return (
                   <>
+                    <AnimatePresence>
+                      {isFormatPainterActive && (
+                        <motion.div 
+                          initial={{ opacity: 0, y: 10, scale: 0.9 }}
+                          animate={{ opacity: 1, y: -45, scale: 1 }}
+                          exit={{ opacity: 0, scale: 0.9 }}
+                          className={cn(
+                            "absolute top-0 flex items-center justify-center gap-2 px-3 py-1.5 rounded-full shadow-lg text-xs font-medium whitespace-nowrap pointer-events-none z-50",
+                            darkMode ? "bg-blue-600 text-white" : "bg-blue-500 text-white"
+                          )}
+                        >
+                          <Info size={14} />
+                          Format Copied. Select target text and click 'Paintbrush' again to apply.
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                    <div className="flex flex-nowrap items-center justify-center gap-0.5 w-full h-8">
                     <button 
                       onClick={handleFormatPainterClick} 
                       className={cn(
                         "p-1 rounded transition-colors flex items-center gap-1",
                         isFormatPainterActive 
-                          ? "bg-white text-black shadow-sm" 
+                          ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm" 
                           : "hover:bg-gray-100 dark:hover:bg-[#333]"
                       )} 
                       title="Format Painter"
@@ -3630,76 +3904,13 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                     </button>
                     <div className="w-px h-3 bg-gray-300 dark:bg-gray-600 mx-0.5" />
                     
-                    {/* Font Dropdown */}
-                    <div className="relative">
-                      <button 
-                        onClick={() => setActiveDropdown(activeDropdown === 'font' ? null : 'font')}
-                        className={cn(
-                          "flex items-center gap-1 pl-1.5 pr-1 py-1 text-xs rounded transition-colors",
-                          activeDropdown === 'font'
-                            ? "bg-white text-black shadow-sm"
-                            : "hover:bg-gray-100 dark:hover:bg-[#333] text-inherit"
-                        )}
-                      >
-                        <Type size={13} className={activeDropdown === 'font' ? "text-black" : "text-gray-400"} />
-                        <span className="w-16 md:w-20 text-left truncate">
-                          {focusedPara
-                            ? (focusedPara.fontFamily?.split(',')[0].replace(/['"]/g, '') || "Default Font") 
-                            : "Default Font"}
-                        </span>
-                        <ChevronDown size={12} className={activeDropdown === 'font' ? "text-black" : "text-gray-400"} />
-                      </button>
-                      <AnimatePresence>
-                        {activeDropdown === 'font' && (
-                          <motion.div 
-                            initial={{ opacity: 0, y: -5 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: -5 }}
-                            className={cn(
-                              "absolute top-full left-0 mt-3 w-40 rounded-xl shadow-2xl py-1 z-50",
-                              darkMode ? "text-white" : "text-gray-900"
-                            )}
-                          >
-                            <div className={cn(
-                              "absolute inset-0 rounded-xl border -z-10 backdrop-blur-2xl pointer-events-none transform-gpu will-change-[backdrop-filter]",
-                              darkMode ? "bg-black/40 border-white/10" : "bg-white/80 border-black/10"
-                            )} />
-                            {[
-                              { name: "Default Font", value: "" },
-                              { name: "Arial", value: "Arial, sans-serif" },
-                              { name: "Times New Roman", value: "'Times New Roman', serif" },
-                              { name: "Courier New", value: "'Courier New', monospace" },
-                              { name: "Georgia", value: "Georgia, serif" },
-                              { name: "Verdana", value: "Verdana, sans-serif" },
-                            ].map(font => (
-                              <button
-                                key={font.name}
-                                onClick={() => {
-                                  updateFocusedBlock({ fontFamily: font.value });
-                                  setActiveDropdown(null);
-                                }}
-                                className={cn(
-                                  "w-full text-left px-3 py-1.5 text-xs hover:bg-gray-100 dark:hover:bg-[#333] transition-colors",
-                                  focusedPara && focusedPara.fontFamily === font.value && 
-                                  "bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400"
-                                )}
-                                style={{ fontFamily: font.value || "inherit" }}
-                              >
-                                {font.name}
-                              </button>
-                            ))}
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
 
-                    <div className="w-px h-3 bg-gray-300 dark:bg-gray-600 mx-0.5" />
                     <button 
-                      onClick={() => updateFocusedBlock({ isBold: true })} 
+                      onClick={() => updateFocusedBlock({ isBold: 'toggle' })} 
                       className={cn(
                         "p-1 rounded transition-colors",
                         focusedPara && focusedPara.isBold
-                          ? "bg-white text-black shadow-sm"
+                          ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
                           : "hover:bg-gray-100 dark:hover:bg-[#333]"
                       )} 
                       title="Bold"
@@ -3707,11 +3918,11 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                       <Bold size={15} />
                     </button>
                     <button 
-                      onClick={() => updateFocusedBlock({ isItalic: true })} 
+                      onClick={() => updateFocusedBlock({ isItalic: 'toggle' })} 
                       className={cn(
                         "p-1 rounded transition-colors",
                         focusedPara && focusedPara.isItalic
-                          ? "bg-white text-black shadow-sm"
+                          ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
                           : "hover:bg-gray-100 dark:hover:bg-[#333]"
                       )} 
                       title="Italic"
@@ -3727,7 +3938,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                         className={cn(
                           "flex items-center gap-0.5 p-1 rounded transition-colors",
                           activeDropdown === 'align'
-                            ? "bg-white text-black shadow-sm"
+                            ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
                             : "hover:bg-gray-100 dark:hover:bg-[#333] text-inherit"
                         )}
                         title="Alignment"
@@ -3741,71 +3952,26 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                             default: return <AlignLeft size={15} />;
                           }
                         })()}
-                        <ChevronDown size={10} className={activeDropdown === 'align' ? "text-black" : "text-gray-400"} />
+                        <ChevronDown size={10} className={cn("transition-transform duration-200 opacity-50", activeDropdown === 'align' ? "rotate-180" : "")} />
                       </button>
                       <AnimatePresence>
                         {activeDropdown === 'align' && (
                           <motion.div 
-                            initial={{ opacity: 0, y: -5 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: -5 }}
+                            initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                            transition={{ duration: 0.1 }}
                             className={cn(
-                              "absolute top-full left-1/2 -translate-x-1/2 mt-3 rounded-xl shadow-2xl p-1 z-50 flex gap-1",
-                              darkMode ? "text-white" : "text-gray-900"
+                              "absolute top-full mt-2 left-1/2 -translate-x-1/2 rounded-xl shadow-2xl z-50 p-2 backdrop-blur-2xl flex gap-1 transform-gpu",
+                              darkMode ? "bg-black/80 border border-white/10 text-white" : "bg-white/95 border border-black/10 text-gray-900"
                             )}
                           >
-                            <div className={cn(
-                              "absolute inset-0 rounded-xl border -z-10 backdrop-blur-2xl pointer-events-none transform-gpu will-change-[backdrop-filter]",
-                              darkMode ? "bg-black/40 border-white/10" : "bg-white/80 border-black/10"
-                            )} />
-                            <button 
-                              onClick={() => { updateFocusedBlock({ alignment: 'left' }); setActiveDropdown(null); }} 
-                              className={cn(
-                                "p-1.5 rounded transition-colors",
-                                focusedPara && focusedPara.alignment === 'left'
-                                  ? "bg-gray-200 dark:bg-[#444]"
-                                  : "hover:bg-gray-100 dark:hover:bg-[#333]"
-                              )} 
-                              title="Align Left"
-                            >
-                              <AlignLeft size={15} />
-                            </button>
-                            <button 
-                              onClick={() => { updateFocusedBlock({ alignment: 'center' }); setActiveDropdown(null); }} 
-                              className={cn(
-                                "p-1.5 rounded transition-colors",
-                                focusedPara && focusedPara.alignment === 'center'
-                                  ? "bg-gray-200 dark:bg-[#444]"
-                                  : "hover:bg-gray-100 dark:hover:bg-[#333]"
-                              )} 
-                              title="Align Center"
-                            >
-                              <AlignCenter size={15} />
-                            </button>
-                            <button 
-                              onClick={() => { updateFocusedBlock({ alignment: 'right' }); setActiveDropdown(null); }} 
-                              className={cn(
-                                "p-1.5 rounded transition-colors",
-                                focusedPara && focusedPara.alignment === 'right'
-                                  ? "bg-gray-200 dark:bg-[#444]"
-                                  : "hover:bg-gray-100 dark:hover:bg-[#333]"
-                              )} 
-                              title="Align Right"
-                            >
-                              <AlignRight size={15} />
-                            </button>
-                            <button 
-                              onClick={() => { updateFocusedBlock({ alignment: 'justify' }); setActiveDropdown(null); }} 
-                              className={cn(
-                                "p-1.5 rounded transition-colors",
-                                focusedPara && focusedPara.alignment === 'justify'
-                                  ? "bg-gray-200 dark:bg-[#444]"
-                                  : "hover:bg-gray-100 dark:hover:bg-[#333]"
-                              )} 
-                              title="Justify"
-                            >
-                              <AlignJustify size={15} />
-                            </button>
+                            {['left', 'center', 'right', 'justify'].map(al => {
+                               const Icon = al === 'center' ? AlignCenter : al === 'right' ? AlignRight : al === 'justify' ? AlignJustify : AlignLeft;
+                               return (
+                                 <button key={al} onClick={() => { updateFocusedBlock({ alignment: al }); setActiveDropdown(null); }} className={cn("p-1.5 rounded transition-colors border border-transparent", focusedPara?.alignment === al || (!focusedPara?.alignment && al === 'left') ? "bg-blue-500 text-white shadow-sm" : "hover:bg-black/5 dark:hover:bg-white/10")} title={`Align ${al}`}><Icon size={16} /></button>
+                               );
+                            })}
                           </motion.div>
                         )}
                       </AnimatePresence>
@@ -3818,48 +3984,40 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                         className={cn(
                           "flex items-center gap-0.5 p-1 rounded transition-colors",
                           activeDropdown === 'color'
-                            ? "bg-white text-black shadow-sm"
+                            ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
                             : "hover:bg-gray-100 dark:hover:bg-[#333] text-inherit"
                         )}
                         title="Font Color"
                       >
-                        <Palette size={15} style={{ color: focusedPara ? focusedPara.color : 'inherit' }} />
-                        <ChevronDown size={10} className={activeDropdown === 'color' ? "text-black" : "text-gray-400"} />
+                        <Palette size={15} style={{ color: focusedPara ? (focusedPara.color || 'inherit') : 'inherit' }} />
+                        <ChevronDown size={10} className={cn("transition-transform duration-200 opacity-50", activeDropdown === 'color' ? "rotate-180" : "")} />
                       </button>
                       <AnimatePresence>
                         {activeDropdown === 'color' && (
                           <motion.div 
-                            initial={{ opacity: 0, y: -5 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: -5 }}
+                            initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                            transition={{ duration: 0.1 }}
                             className={cn(
-                              "absolute top-full left-1/2 -translate-x-1/2 mt-3 rounded-xl shadow-2xl p-1.5 z-50 flex gap-1.5",
-                              darkMode ? "text-white" : "text-gray-900"
+                              "absolute top-full mt-2 left-1/2 -translate-x-1/2 rounded-xl shadow-2xl z-50 p-2 backdrop-blur-2xl flex gap-2 w-max transform-gpu",
+                              darkMode ? "bg-black/80 border border-white/10 text-white" : "bg-white/95 border border-black/10 text-gray-900"
                             )}
                           >
-                            <div className={cn(
-                              "absolute inset-0 rounded-xl border -z-10 backdrop-blur-2xl pointer-events-none transform-gpu will-change-[backdrop-filter]",
-                              darkMode ? "bg-black/40 border-white/10" : "bg-white/80 border-black/10"
-                            )} />
                             {[
-                              { name: "Default", value: "" },
-                              { name: "Black", value: "#000000" },
-                              { name: "Red", value: "#FF0000" },
-                              { name: "Blue", value: "#2563EB" },
-                              { name: "Green", value: "#16A34A" },
-                              { name: "Gray", value: "#6B7280" },
-                            ].map(color => (
-                              <button
-                                key={color.name}
-                                onClick={() => {
-                                  updateFocusedBlock({ color: color.value || undefined });
-                                  setActiveDropdown(null);
-                                }}
-                                className="w-5 h-5 rounded-full border border-gray-300 dark:border-gray-600 transition-transform hover:scale-110"
-                                style={{ backgroundColor: color.value || 'transparent' }}
-                                title={color.name}
-                              />
-                            ))}
+                               { name: "De", value: "" }, { name: "Black", value: "#000000" }, { name: "Red", value: "#FF0000" },
+                               { name: "Blue", value: "#2563EB" }, { name: "Green", value: "#16A34A" }, { name: "Gray", value: "#6B7280" },
+                             ].map(color => (
+                               <button
+                                 key={color.name}
+                                 onClick={() => { updateFocusedBlock({ color: color.value || undefined }); setActiveDropdown(null); }}
+                                 className={cn("w-6 h-6 rounded-full border transition-transform hover:scale-110 flex items-center justify-center text-[8px]", focusedPara?.color === color.value || (!focusedPara?.color && color.value === "") ? "scale-125 ring-2 ring-blue-500 shadow-sm" : "")}
+                                 style={{ backgroundColor: color.value || 'transparent', borderColor: color.value ? 'transparent' : (darkMode ? '#444' : '#e5e7eb') }}
+                                 title={color.name}
+                               >
+                                 {color.value === "" && "De"}
+                               </button>
+                             ))}
                           </motion.div>
                         )}
                       </AnimatePresence>
@@ -3874,7 +4032,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                         className={cn(
                           "flex items-center gap-0.5 p-1 rounded transition-colors",
                           activeDropdown === 'list'
-                            ? "bg-white text-black shadow-sm"
+                            ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
                             : "hover:bg-gray-100 dark:hover:bg-[#333] text-inherit"
                         )}
                         title="Lists"
@@ -3883,47 +4041,121 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                           if (focusedPara?.isNumbering) return <ListOrdered size={15} />;
                           return <List size={15} />;
                         })()}
-                        <ChevronDown size={10} className={activeDropdown === 'list' ? "text-black" : "text-gray-400"} />
+                        <ChevronDown size={10} className={cn("transition-transform duration-200 opacity-50", activeDropdown === 'list' ? "rotate-180" : "")} />
                       </button>
                       <AnimatePresence>
                         {activeDropdown === 'list' && (
                           <motion.div 
-                            initial={{ opacity: 0, y: -5 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: -5 }}
+                            initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                            transition={{ duration: 0.1 }}
                             className={cn(
-                              "absolute top-full left-1/2 -translate-x-1/2 mt-3 rounded-xl shadow-2xl p-1 z-50 flex gap-1",
-                              darkMode ? "text-white" : "text-gray-900"
+                              "absolute top-full mt-2 left-1/2 -translate-x-1/2 rounded-xl shadow-2xl z-50 p-2 backdrop-blur-2xl flex gap-1 transform-gpu",
+                              darkMode ? "bg-black/80 border border-white/10 text-white" : "bg-white/95 border border-black/10 text-gray-900"
                             )}
                           >
-                            <div className={cn(
-                              "absolute inset-0 rounded-xl border -z-10 backdrop-blur-2xl pointer-events-none transform-gpu will-change-[backdrop-filter]",
-                              darkMode ? "bg-black/40 border-white/10" : "bg-white/80 border-black/10"
-                            )} />
-                            <button 
-                              onClick={() => { updateFocusedBlock({ isBullet: true }); setActiveDropdown(null); }} 
-                              className={cn(
-                                "p-1.5 rounded transition-colors",
-                                focusedPara && focusedPara.isBullet
-                                  ? "bg-gray-200 dark:bg-[#444]"
-                                  : "hover:bg-gray-100 dark:hover:bg-[#333]"
-                              )} 
-                              title="Bullet List"
-                            >
-                              <List size={15} />
-                            </button>
-                            <button 
-                              onClick={() => { updateFocusedBlock({ isNumbering: true }); setActiveDropdown(null); }} 
-                              className={cn(
-                                "p-1.5 rounded transition-colors",
-                                focusedPara && focusedPara.isNumbering
-                                  ? "bg-gray-200 dark:bg-[#444]"
-                                  : "hover:bg-gray-100 dark:hover:bg-[#333]"
-                              )} 
-                              title="Numbered List"
-                            >
-                              <ListOrdered size={15} />
-                            </button>
+                            <button onClick={() => { updateFocusedBlock({ isBullet: 'toggle' }); setActiveDropdown(null); }} className={cn("p-1.5 rounded transition-colors border border-transparent", focusedPara?.isBullet ? "bg-blue-500 text-white shadow-sm" : "hover:bg-black/5 dark:hover:bg-white/10")} title="Bullet List"><List size={16} /></button>
+                            <button onClick={() => { updateFocusedBlock({ isNumbering: 'toggle' }); setActiveDropdown(null); }} className={cn("p-1.5 rounded transition-colors border border-transparent", focusedPara?.isNumbering ? "bg-blue-500 text-white shadow-sm" : "hover:bg-black/5 dark:hover:bg-white/10")} title="Numbered List"><ListOrdered size={16} /></button>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+
+                    <div className="w-px h-3 bg-gray-300 dark:bg-gray-600 mx-0.5" />
+                    
+                    {/* Font Family Dropdown */}
+                    <div className="relative">
+                      <button
+                        onClick={() => setActiveDropdown(activeDropdown === 'fontFamily' ? null : 'fontFamily')}
+                        className={cn(
+                          "flex items-center gap-0.5 p-1 rounded transition-colors",
+                          activeDropdown === 'fontFamily' 
+                            ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
+                            : "hover:bg-gray-100 dark:hover:bg-[#333] text-inherit"
+                        )}
+                      >
+                        <Type size={14} className="opacity-50" />
+                        <span className="text-[11px] md:text-xs truncate w-[50px] md:w-[70px] text-left ml-1">
+                          {focusedPara?.fontFamily ? (focusedPara.fontFamily.split(',')[0].replace(/'/g, '').replace(/"/g, '') || "Default") : "Default"}
+                        </span>
+                        <ChevronDown size={10} className={cn("transition-transform duration-200 opacity-50", activeDropdown === 'fontFamily' ? "rotate-180" : "")} />
+                      </button>
+                      <AnimatePresence>
+                        {activeDropdown === 'fontFamily' && (
+                          <motion.div 
+                            initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                            transition={{ duration: 0.1 }}
+                            className={cn(
+                              "absolute top-full mt-2 left-1/2 -translate-x-1/2 rounded-xl shadow-2xl z-50 p-2 backdrop-blur-2xl flex flex-col gap-1 w-max transform-gpu",
+                              darkMode ? "bg-black/80 border border-white/10 text-white" : "bg-white/95 border border-black/10 text-gray-900"
+                            )}
+                          >
+                            {[
+                               { name: "Default Font", value: "" },
+                               { name: "Arial", value: "Arial, sans-serif" },
+                               { name: "Times New Roman", value: "'Times New Roman', serif" },
+                               { name: "Courier New", value: "'Courier New', monospace" },
+                               { name: "Georgia", value: "Georgia, serif" },
+                               { name: "Verdana", value: "Verdana, sans-serif" }
+                            ].map(font => (
+                              <button
+                                key={font.name}
+                                onClick={() => { updateFocusedBlock({ fontFamily: font.value }); setActiveDropdown(null); }}
+                                className={cn("px-3 py-1.5 rounded transition-colors text-xs text-left border border-transparent whitespace-nowrap", focusedPara?.fontFamily === font.value ? (darkMode ? "bg-white/20 text-white" : "bg-black/10 text-black") : "hover:bg-black/5 dark:hover:bg-white/10")}
+                                style={{ fontFamily: font.value }}
+                              >
+                                {font.name}
+                              </button>
+                            ))}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                      
+                    {/* Font Size Dropdown */}
+                    <div className="relative">
+                      <button
+                        onClick={() => setActiveDropdown(activeDropdown === 'fontSize' ? null : 'fontSize')}
+                        className={cn(
+                          "flex items-center gap-0.5 p-1 rounded transition-colors",
+                          activeDropdown === 'fontSize' 
+                            ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
+                            : "hover:bg-gray-100 dark:hover:bg-[#333] text-inherit"
+                        )}
+                      >
+                        <div className="flex items-baseline font-serif leading-none tracking-tight opacity-70">
+                          <span className="text-[14px]">A</span>
+                          <span className="text-[10px]">a</span>
+                        </div>
+                        <span className="text-[11px] md:text-xs text-center ml-1 w-[24px]">
+                          {focusedPara?.fontSize ? focusedPara.fontSize.replace('pt', '') : "Def"}
+                        </span>
+                        <ChevronDown size={10} className={cn("transition-transform duration-200 opacity-50", activeDropdown === 'fontSize' ? "rotate-180" : "")} />
+                      </button>
+                      <AnimatePresence>
+                        {activeDropdown === 'fontSize' && (
+                          <motion.div 
+                            initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                            transition={{ duration: 0.1 }}
+                            className={cn(
+                              "absolute top-full mt-2 left-1/2 -translate-x-1/2 rounded-xl shadow-2xl z-50 p-2 backdrop-blur-2xl grid grid-cols-5 gap-1 w-max transform-gpu",
+                              darkMode ? "bg-black/80 border border-white/10 text-white" : "bg-white/95 border border-black/10 text-gray-900"
+                            )}
+                          >
+                            {[ {name: "Def", value: ""}, {name: "8pt", value: "8pt"}, {name: "9pt", value: "9pt"}, {name: "10pt", value: "10pt"}, {name: "11pt", value: "11pt"}, {name: "12pt", value: "12pt"}, {name: "14pt", value: "14pt"}, {name: "18pt", value: "18pt"}, {name: "24pt", value: "24pt"}, {name: "36pt", value: "36pt"} ].map(size => (
+                              <button
+                                key={size.name}
+                                onClick={() => { updateFocusedBlock({ fontSize: size.value }); setActiveDropdown(null); }}
+                                className={cn("w-8 h-8 flex items-center justify-center rounded transition-colors text-xs border border-transparent", focusedPara?.fontSize === size.value ? (darkMode ? "bg-white/20 text-white" : "bg-black/10 text-black") : "hover:bg-black/5 dark:hover:bg-white/10")}
+                              >
+                                {size.name.replace('pt', '')}
+                              </button>
+                            ))}
                           </motion.div>
                         )}
                       </AnimatePresence>
@@ -3942,70 +4174,73 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused }
                       setFocusedBlock({ s: focusedBlock.s, p: focusedBlock.p + 1 });
                     }} className="p-1 hover:bg-blue-100 text-blue-500 rounded transition-colors" title="Add Paragraph Below"><Plus size={15} /></button>
                     <button onClick={deleteFocusedBlock} className="p-1 hover:bg-red-100 text-red-500 rounded transition-colors" title="Delete Paragraph"><Trash size={15} /></button>
+                    </div>
                   </>
                 );
               })()}
+              </div>
             </div>
-          </div>
+        )}
 
           <AnimatePresence mode="wait">
             {documentContent}
           </AnimatePresence>
         </div>
-
-        {/* AI Code Window Overlay */}
-        <AnimatePresence>
-          {showCode && lastJson && (
-            <motion.div 
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 20 }}
-              className={cn(
-                "absolute inset-0 z-50 flex flex-col transition-all backdrop-blur-2xl transform-gpu will-change-[backdrop-filter]",
-                darkMode ? "bg-black/60 border-white/10 text-white" : "bg-white/80 border-black/10 text-gray-900"
-              )}
-            >
-              <div className={cn(
-                "flex items-center justify-between p-4 border-b",
-                darkMode ? "border-white/10" : "border-black/10"
-              )}>
-                <div className="flex items-center gap-2 text-blue-600">
-                  <Code size={18} />
-                  <span className="font-semibold text-sm">{t.aiStructure}</span>
-                </div>
-                <button 
-                  onClick={() => setShowCode(false)} 
-                  className={cn(
-                    "p-1 rounded transition-colors",
-                    darkMode ? "hover:bg-white/10 text-gray-400 hover:text-white" : "hover:bg-black/5 text-gray-500 hover:text-black"
-                  )}
-                >
-                  <X size={18} />
-                </button>
-              </div>
-              <div className="flex-1 overflow-auto p-4 md:p-8 text-sm custom-scrollbar" ref={codeScrollRef}>
-                <SyntaxHighlighter 
-                  language="json" 
-                  style={darkMode ? vscDarkPlus : vs}
-                  wrapLines={true}
-                  wrapLongLines={true}
-                  customStyle={{ 
-                    margin: 0, 
-                    borderRadius: '12px', 
-                    fontSize: '13px',
-                    background: 'transparent',
-                    padding: '1rem'
-                  }}
-                  codeTagProps={{ style: { background: 'transparent' } }}
-                >
-                  {lastJson}
-                </SyntaxHighlighter>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
       </motion.main>
       </div>
+
+      {/* AI Code Window Overlay */}
+      <AnimatePresence>
+        {showCode && lastJson && (
+          <motion.div 
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            className={cn(
+              "fixed inset-0 z-[150] flex flex-col transition-all backdrop-blur-xl transform-gpu will-change-[backdrop-filter] ai-code-panel",
+              darkMode ? "bg-black/50 border-white/10 text-white" : "bg-white/50 border-black/10 text-gray-900"
+            )}
+          >
+            <div className={cn(
+              "flex items-center justify-between p-4 border-b",
+              darkMode ? "border-white/10" : "border-black/5"
+            )}>
+              <div className="flex items-center gap-2 text-blue-600">
+                <Code size={18} />
+                <span className="font-semibold text-sm">{t.aiStructure}</span>
+              </div>
+              <button 
+                onClick={() => setShowCode(false)} 
+                className={cn(
+                  "p-1 rounded transition-colors",
+                  darkMode ? "hover:bg-white/10 text-gray-400 hover:text-white" : "hover:bg-black/5 text-gray-500 hover:text-black"
+                )}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto p-4 md:p-8 text-sm custom-scrollbar" ref={codeScrollRef}>
+              <SyntaxHighlighter 
+                language="json" 
+                style={darkMode ? vscDarkPlus : vs}
+                wrapLines={true}
+                wrapLongLines={true}
+                customStyle={{ 
+                  margin: 0, 
+                  borderRadius: '12px', 
+                  fontSize: '13px',
+                  background: 'transparent',
+                  backgroundColor: 'transparent',
+                  padding: '1rem'
+                }}
+                codeTagProps={{ style: { background: 'transparent', backgroundColor: 'transparent' } }}
+              >
+                {lastJson}
+              </SyntaxHighlighter>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Image Zoom Modal */}
       <AnimatePresence>
