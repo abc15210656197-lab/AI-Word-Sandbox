@@ -1,9 +1,12 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
-import { getFirestore, doc, setDoc, getDoc, getDocs, collection, addDoc, query, orderBy, limit, onSnapshot, getDocFromServer, where, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { getFirestore, doc, setDoc, getDoc, getDocs, collection, addDoc, query, orderBy, limit, onSnapshot, getDocFromServer, where, deleteDoc, serverTimestamp, setLogLevel } from 'firebase/firestore';
 // @ts-ignore
 import firebaseConfig from '../firebase-applet-config.json';
 import { replacer } from './lib/json-utils';
+
+// Set Firestore log level to avoid verbose offline warnings
+setLogLevel('silent');
 
 // Initialize Firebase SDK
 const app = initializeApp(firebaseConfig);
@@ -63,6 +66,12 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     operationType,
     path
   }
+  // Convert offline errors to simpler warnings so it doesn't crash apps aggressively
+  if (errInfo.error.includes('the client is offline') || errInfo.error.includes('network-request-failed')) {
+    console.warn('Firestore offline mode active or network request failed.');
+    return; // Don't throw for offline/network errors to allow offline capabilities
+  }
+  
   console.error('Firestore Error: ', JSON.stringify(errInfo, replacer));
   throw new Error(JSON.stringify(errInfo, replacer));
 }
@@ -75,13 +84,13 @@ async function testConnection() {
     console.log("Firestore connection successful.");
   } catch (error) {
     if (error instanceof Error) {
-      if (error.message.includes('the client is offline')) {
-        console.error("Firestore Error: The client is offline. Please check your Firebase configuration and internet connection.");
+      if (error.message.includes('the client is offline') || error.message.includes('network-request-failed')) {
+        console.warn("Firestore: The client is offline or network request failed. The app will operate in offline mode if possible.");
       } else if (error.message.includes('permission-denied') || error.message.includes('Missing or insufficient permissions')) {
         // Permission denied is actually a good sign - it means we reached the server!
         console.log("Firestore connection reached server (Permission Denied as expected).");
       } else {
-        console.error("Firestore Connection Error:", error.message);
+        console.warn("Firestore Connection Warning:", error.message);
       }
     }
   }

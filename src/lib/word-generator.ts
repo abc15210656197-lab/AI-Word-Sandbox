@@ -8,63 +8,158 @@ import {
   LevelFormat, 
   WidthType, 
   BorderStyle,
-  Table,
-  TableRow,
-  TableCell,
-  VerticalAlign,
-  ImageRun
+  Table, 
+  TableRow, 
+  TableCell, 
+  VerticalAlign, 
+  ImageRun,
+  Math,
+  MathRun,
+  MathFraction,
+  MathSubScript,
+  MathSuperScript,
+  MathSubSuperScript,
+  MathRadical,
+  MathRoundBrackets,
+  MathSquareBrackets,
+  MathCurlyBrackets
 } from "docx";
-import { saveAs } from "file-saver";
-import katex from "katex";
-import { toPng } from "html-to-image";
-import { DocumentState, DocParagraph, DocTable, DocImage } from "../types";
+import {saveAs} from "file-saver";
+import {DocumentState, DocParagraph, DocTable, DocImage, DocFormula} from "../types";
 
-async function formulaToImage(latex: string, isBlock: boolean = false): Promise<{ data: Uint8Array, width: number, height: number } | null> {
-  const container = document.createElement('div');
-  container.style.position = 'absolute';
-  container.style.left = '-9999px';
-  container.style.top = '-9999px';
-  container.style.padding = '4px';
-  container.style.background = 'white';
-  container.style.color = 'black';
-  container.style.display = 'inline-block';
-  container.style.fontSize = '24px'; // Larger for better quality
+import temml from "temml";
+
+/**
+ * Converts MathML elements to docx Math components recursively.
+ */
+const convertMathMLToDocx = (node: Node): any[] => {
+  if (node.nodeType === Node.TEXT_NODE) {
+    const text = node.textContent;
+    if (!text) return [];
+    // 移除 Temml 产生的数学不可见字符
+    const cleanText = text.replace(/[\u2061\u2062\u2063\u2064]/g, "");
+    if (!cleanText.trim()) return [];
+    return [new MathRun(cleanText)];
+  }
   
-  const mathSpan = document.createElement('span');
+  if (node.nodeType !== Node.ELEMENT_NODE) return [];
+
+  const element = node as Element;
+  const tagName = element.localName || element.tagName.toLowerCase().replace(/.*:/, '');
+
+  const getChildren = (el: Element) => Array.from(el.childNodes).flatMap(c => convertMathMLToDocx(c));
+
+  switch (tagName) {
+    case 'mi':
+    case 'mn':
+    case 'mo':
+    case 'mtext':
+    case 'ms':
+    case 'mspace': {
+      const text = element.textContent || "";
+      const cleanText = text.replace(/[\u2061\u2062\u2063\u2064]/g, "");
+      return [new MathRun(cleanText)];
+    }
+    case 'mfrac': {
+      const children = Array.from(element.children);
+      if (children.length < 2) return getChildren(element);
+      return [new MathFraction({
+        numerator: convertMathMLToDocx(children[0]),
+        denominator: convertMathMLToDocx(children[1])
+      })];
+    }
+    case 'msub': {
+      const children = Array.from(element.children);
+      if (children.length < 2) return getChildren(element);
+      return [new MathSubScript({
+        children: convertMathMLToDocx(children[0]),
+        subScript: convertMathMLToDocx(children[1])
+      })];
+    }
+    case 'msup': {
+      const children = Array.from(element.children);
+      if (children.length < 2) return getChildren(element);
+      return [new MathSuperScript({
+        children: convertMathMLToDocx(children[0]),
+        superScript: convertMathMLToDocx(children[1])
+      })];
+    }
+    case 'msubsup': {
+      const children = Array.from(element.children);
+      if (children.length < 3) return getChildren(element);
+      return [new MathSubSuperScript({
+        children: convertMathMLToDocx(children[0]),
+        subScript: convertMathMLToDocx(children[1]),
+        superScript: convertMathMLToDocx(children[2])
+      })];
+    }
+    case 'msqrt':
+      return [new MathRadical({
+        children: getChildren(element)
+      })];
+    case 'mroot': {
+      const children = Array.from(element.children);
+      if (children.length < 2) return [new MathRadical({ children: getChildren(element) })];
+      return [new MathRadical({
+        children: convertMathMLToDocx(children[0]),
+        degree: convertMathMLToDocx(children[1])
+      })];
+    }
+    case 'mfenced': {
+      const open = element.getAttribute('open') || '(';
+      const close = element.getAttribute('close') || ')';
+      const children = getChildren(element);
+      if (open === '(' && close === ')') return [new MathRoundBrackets({ children })];
+      if (open === '[' && close === ']') return [new MathSquareBrackets({ children })];
+      if (open === '{' && close === '}') return [new MathCurlyBrackets({ children })];
+      return [new MathRoundBrackets({ children })];
+    }
+    case 'mrow':
+    case 'mstyle':
+    case 'math':
+    case 'semantics':
+    case 'annotation':
+    case 'annotation-xml':
+      return getChildren(element);
+    default:
+      if (element.childNodes.length > 0) return getChildren(element);
+      return element.textContent ? [new MathRun(element.textContent)] : [];
+  }
+};
+
+/**
+ * Converts a LaTeX string into docx Math objects.
+ */
+const latexToMathObjects = (latex: string) => {
   try {
-    katex.render(latex.replace(/^\$\$?/, '').replace(/\$\$?$/, ''), mathSpan, {
-      displayMode: isBlock,
-      throwOnError: false
-    });
-    container.appendChild(mathSpan);
-    document.body.appendChild(container);
+    const rawLatex = latex.trim().replace(/^(\$\$|\$)/, '').replace(/(\$\$|\$)$/, '');
+    const mathmlString = temml.renderToString(rawLatex, { xml: true });
     
-    // Small delay to ensure rendering is complete
-    await new Promise(r => setTimeout(r, 50));
+    const parser = new DOMParser();
+    const xmlDoc = parser.parseFromString(mathmlString, "text/xml");
+    let mathElement = xmlDoc.getElementsByTagName("math")[0] || 
+                      xmlDoc.getElementsByTagNameNS("http://www.w3.org/1998/Math/MathML", "math")[0];
     
-    const dataUrl = await toPng(container, { backgroundColor: 'white', pixelRatio: 2 });
-    const img = new Image();
-    img.src = dataUrl;
-    await new Promise(r => img.onload = r);
-    
-    const width = img.naturalWidth / 2; 
-    const height = img.naturalHeight / 2;
-    
-    const base64 = dataUrl.split(',')[1];
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
+    if (!mathElement) {
+      mathElement = xmlDoc.querySelector("math") as any;
+    }
+
+    if (!mathElement) {
+      console.warn("No math element found for:", latex);
+      return [new Math({ children: [new MathRun(rawLatex)] })];
     }
     
-    document.body.removeChild(container);
-    return { data: bytes, width, height };
+    const mathObjects = Array.from(mathElement.childNodes).flatMap(node => convertMathMLToDocx(node));
+    return [new Math({ children: mathObjects })];
   } catch (e) {
-    console.error("Formula render error", e);
-    if (container.parentElement) document.body.removeChild(container);
-    return null;
+    console.error("LaTeX to MathML error:", e);
+    return [new TextRun({ 
+      text: latex,
+      font: { ascii: "Cambria Math", eastAsia: "Cambria Math", hAnsi: "Cambria Math", cs: "Cambria Math" }
+    })];
   }
-}
+};
+
 
 export async function generateWordDoc(state: DocumentState, resolveImage?: (src: string, alt?: string) => Promise<Uint8Array | string | null>) {
   const extractFont = (fontFamily?: string) => {
@@ -121,19 +216,8 @@ export async function generateWordDoc(state: DocumentState, resolveImage?: (src:
       for (const part of parts) {
         if (!part) continue;
         if ((part.startsWith('$$') && part.endsWith('$$')) || (part.startsWith('$') && part.endsWith('$'))) {
-          const isBlock = part.startsWith('$$');
-          const latex = part.replace(/^\$\$?/, '').replace(/\$\$?$/, '');
-          const img = await formulaToImage(latex, isBlock);
-          if (img) {
-            runs.push(new ImageRun({
-              data: img.data,
-              transformation: {
-                width: img.width * (isBlock ? 0.9 : 0.7), // Scale for Word
-                height: img.height * (isBlock ? 0.9 : 0.7),
-              },
-            } as any));
-            continue;
-          }
+          runs.push(...latexToMathObjects(part));
+          continue;
         }
         
         // Split text by emojis to wrap them in a font that supports them (Segoe UI Emoji)
@@ -183,17 +267,7 @@ export async function generateWordDoc(state: DocumentState, resolveImage?: (src:
 
     const children = p.runs ? (await Promise.all(p.runs.map(async (run) => {
       if (run.isFormula) {
-        const img = await formulaToImage(run.text, false);
-        if (img) {
-          return [new ImageRun({
-            data: img.data,
-            transformation: {
-              width: img.width * 0.75,
-              height: img.height * 0.75,
-            },
-          } as any)];
-        }
-        return [new TextRun({ text: run.text })];
+        return latexToMathObjects(run.text);
       }
       return await processTextWithMath(run.text, {
         bold: run.isBold,
@@ -410,22 +484,19 @@ export async function generateWordDoc(state: DocumentState, resolveImage?: (src:
               return new Paragraph({ children: [new TextRun({ text: "[Image: " + imgData.src + "]" })] });
             }
             if (p.type === 'formula') {
-              const formulaData = p as any;
-              const img = await formulaToImage(formulaData.latex, true);
+              const formulaData = p as DocFormula;
+              let latex = formulaData.latex;
+              if (formulaData.isBlock && !latex.startsWith('$$')) {
+                latex = `$$${latex}$$`;
+              } else if (!formulaData.isBlock && !latex.startsWith('$')) {
+                latex = `$${latex}$`;
+              }
               
               return new Paragraph({
                 alignment: formulaData.alignment === 'center' ? AlignmentType.CENTER : 
                            formulaData.alignment === 'right' ? AlignmentType.RIGHT : 
                            AlignmentType.LEFT,
-                children: img ? [
-                  new ImageRun({
-                    data: img.data,
-                    transformation: {
-                      width: img.width,
-                      height: img.height,
-                    },
-                  } as any)
-                ] : [new TextRun({ text: formulaData.latex })]
+                children: latexToMathObjects(latex)
               });
             }
             return await createParagraph(p as DocParagraph);

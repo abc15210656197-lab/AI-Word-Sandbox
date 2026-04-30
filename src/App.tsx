@@ -52,7 +52,9 @@ import {
   Sparkles,
   Eye,
   MoreHorizontal,
-  Info
+  Info,
+  LayoutTemplate,
+  AlertCircle
 } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkMath from "remark-math";
@@ -62,7 +64,7 @@ import "katex/dist/katex.min.css";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus, vs } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { cn } from "./lib/utils";
-import { DocumentState, ChatMessage, ChatAttachment, DocTable, DocParagraph, DocImage } from "./types";
+import { DocumentState, ChatMessage, ChatAttachment, DocTable, DocParagraph, DocImage, DocFormula } from "./types";
 import { generateWordDoc } from "./lib/word-generator";
 import { parseWordDoc } from "./lib/word-parser";
 import { 
@@ -257,6 +259,7 @@ const SYSTEM_INSTRUCTION = `你是一个专业的 AI Word 文档助手。你的�
 ### 核心任务
 1. **对话**：使用中文与用户讨论文档内容。
 2. **文档更新**：提供 JSON 对象来修改文档。
+3. **理解用户意图**：严禁自作主张将任务转换为“英语完形填空”、“英语做题”或其他非用户明确请求的范式。认真阅读用户的具体要求（比如“提取僻义”、“做生物笔记”等），严格遵循。
 
 ### 必须遵守的 DOCX 技能规范 (DOCX SKILL)
 在生成任何文档内容之前，你必须“阅读”并遵守以下技术准则：
@@ -414,16 +417,31 @@ function ModelSelector({
   darkMode, 
   isAgentMode, 
   setIsAgentMode,
-  lang
+  lang,
+  onApplyTemplate,
+  selectedTemplateId,
+  customTemplates,
+  setNewTemplateModal,
+  onDeleteTemplate,
+  onEditTemplate,
+  activeTemplate
 }: { 
   selected: string, 
   onChange: (val: string) => void, 
   darkMode: boolean,
   isAgentMode: boolean,
   setIsAgentMode: (val: boolean) => void,
-  lang: 'en' | 'zh'
+  lang: 'en' | 'zh',
+  onApplyTemplate: (templateId: string, prompt?: string) => void,
+  selectedTemplateId: string | null,
+  customTemplates: any[],
+  setNewTemplateModal: (val: boolean) => void,
+  onDeleteTemplate: (id: string) => void,
+  onEditTemplate: (template: any) => void,
+  activeTemplate: any
 }) {
   const [isOpen, setIsOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<'models' | 'templates'>('models');
   const t = translations[lang];
   const models = [
     { id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro", icon: "✨", desc: "Best for complex reasoning & logic" },
@@ -437,24 +455,29 @@ function ModelSelector({
       <button 
         onClick={() => setIsOpen(!isOpen)}
         className={cn(
-          "p-2 rounded-lg transition-colors flex items-center gap-1.5 text-xs font-medium border border-transparent",
+          "flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-all border shadow-sm backdrop-blur-2xl transform-gpu will-change-[backdrop-filter]",
           isOpen 
-            ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
+            ? (darkMode ? "bg-white/20 text-white border-white/30 shadow-lg" : "bg-white/80 text-black border-white shadow-lg")
             : (darkMode 
-                ? "text-gray-400 hover:bg-[#444]" 
-                : "text-gray-500 hover:bg-gray-200")
+                ? "bg-black/30 border-white/10 text-gray-200 hover:bg-black/50" 
+                : "bg-white/50 border-black/5 text-gray-700 hover:bg-white/70")
         )}
       >
         <div className="flex items-center gap-2">
-          <span>{selectedModel.icon}</span>
+          <span className="text-lg">{selectedModel.icon}</span>
           <span>{selectedModel.name}</span>
           {isAgentMode && (
             <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-purple-500/20 text-purple-400 text-[10px] font-bold uppercase tracking-wider border border-purple-500/30">
               Agent
             </span>
           )}
+          {activeTemplate && (
+            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-blue-500/20 text-blue-400 text-[10px] font-bold uppercase tracking-wider border border-blue-500/30 relative group/tag">
+              <span>{activeTemplate.name}</span>
+            </div>
+          )}
         </div>
-        <ChevronRight size={14} className={cn("transition-transform duration-200 opacity-50", isOpen ? "rotate-90" : "")} />
+        <ChevronRight size={16} className={cn("transition-transform duration-200", isOpen ? "rotate-90" : "")} />
       </button>
       
       <AnimatePresence>
@@ -467,77 +490,179 @@ function ModelSelector({
               exit={{ opacity: 0, y: 10, scale: 0.95 }}
               transition={{ duration: 0.1, ease: "easeOut" }}
               className={cn(
-                "absolute bottom-full mb-5 left-0 w-72 rounded-xl shadow-2xl z-50 p-1 backdrop-blur-2xl transform-gpu will-change-[backdrop-filter]",
+                "absolute bottom-full mb-5 left-0 w-80 rounded-xl shadow-2xl z-50 p-1 backdrop-blur-2xl transform-gpu will-change-[backdrop-filter]",
                 darkMode 
                   ? "bg-black/80 border border-white/10 text-white" 
                   : "bg-white/95 border border-black/10 text-gray-900"
               )}
             >
-              <div className="px-3 py-2 mb-1 border-b border-white/10">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Sparkles size={16} className="text-purple-400" />
-                    <span className="text-xs font-bold uppercase tracking-wider opacity-60">{t.agent}</span>
-                  </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setIsAgentMode(!isAgentMode);
-                    }}
-                    className={cn(
-                      "relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none",
-                      isAgentMode ? "bg-purple-600" : (darkMode ? "bg-white/10" : "bg-black/10")
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform",
-                        isAgentMode ? "translate-x-5" : "translate-x-1"
-                      )}
-                    />
-                  </button>
-                </div>
-                <p className="text-[10px] text-gray-500 mt-1 leading-tight">
-                  {isAgentMode ? "Agent mode enabled: Auto-planning & deep generation" : "Standard mode: Direct response & editing"}
-                </p>
-              </div>
-
-              {models.map(m => (
+              <div className="flex rounded-lg overflow-hidden border m-2" style={{ borderColor: darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' }}>
                 <button
-                  key={m.id}
-                  onClick={() => { onChange(m.id); setIsOpen(false); }}
+                  onClick={() => setActiveTab('models')}
                   className={cn(
-                    "w-full flex items-start gap-3 px-3 py-3 rounded-xl text-left transition-all relative group backdrop-blur-xl transform-gpu will-change-[backdrop-filter]",
-                    selected === m.id 
-                      ? (darkMode ? "bg-blue-500/30 border border-white/10" : "bg-blue-500/15 border border-blue-500/20") 
-                      : (darkMode ? "hover:bg-white/10" : "hover:bg-black/5")
+                    "flex-1 py-1.5 text-xs font-bold uppercase tracking-widest",
+                    activeTab === 'models' 
+                      ? (darkMode ? "bg-white/20 text-white" : "bg-black/10 text-black") 
+                      : (darkMode ? "hover:bg-white/5 text-gray-500" : "hover:bg-black/5 text-gray-500")
                   )}
                 >
-                  <span className="text-xl mt-0.5">{m.icon}</span>
-                  <div className="flex-1 flex flex-col">
-                    <span className={cn(
-                      "text-sm font-medium",
-                      selected === m.id 
-                        ? (darkMode ? "text-blue-400" : "text-blue-600")
-                        : (darkMode ? "text-gray-200" : "text-gray-800")
-                    )}>
-                      {m.name}
-                    </span>
-                    <span className={cn(
-                      "text-xs mt-0.5",
-                      darkMode ? "text-gray-500" : "text-gray-500"
-                    )}>
-                      {m.desc}
-                    </span>
-                  </div>
-                  {selected === m.id && (
-                    <Check size={16} className={cn(
-                      "absolute right-3 top-1/2 -translate-y-1/2",
-                      darkMode ? "text-blue-400" : "text-blue-600"
-                    )} />
-                  )}
+                  {lang === 'zh' ? '模型' : 'Models'}
                 </button>
-              ))}
+                <button
+                  onClick={() => setActiveTab('templates')}
+                  className={cn(
+                    "flex-1 py-1.5 text-xs font-bold uppercase tracking-widest",
+                    activeTab === 'templates' 
+                      ? (darkMode ? "bg-white/20 text-white" : "bg-black/10 text-black") 
+                      : (darkMode ? "hover:bg-white/5 text-gray-500" : "hover:bg-black/5 text-gray-500")
+                  )}
+                >
+                  {lang === 'zh' ? '模板' : 'Templates'}
+                </button>
+              </div>
+
+              {activeTab === 'models' ? (
+                <>
+                  <div className="px-3 py-2 mb-1 border-b border-white/10">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Sparkles size={16} className="text-purple-400" />
+                        <span className="text-xs font-bold uppercase tracking-wider opacity-60">{t.agent}</span>
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsAgentMode(!isAgentMode);
+                        }}
+                        className={cn(
+                          "relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none",
+                          isAgentMode ? "bg-purple-600" : (darkMode ? "bg-white/10" : "bg-black/10")
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            "inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform",
+                            isAgentMode ? "translate-x-5" : "translate-x-1"
+                          )}
+                        />
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-gray-500 mt-1 leading-tight">
+                      {isAgentMode ? "Agent mode enabled: Auto-planning & deep generation" : "Standard mode: Direct response & editing"}
+                    </p>
+                  </div>
+
+                  <div className="max-h-60 overflow-y-auto custom-scrollbar p-1">
+                    {models.map(m => (
+                      <button
+                        key={m.id}
+                        onClick={() => { onChange(m.id); setIsOpen(false); }}
+                        className={cn(
+                          "w-full flex items-start gap-3 px-3 py-3 rounded-xl text-left transition-all relative group backdrop-blur-xl transform-gpu will-change-[backdrop-filter]",
+                          selected === m.id 
+                            ? (darkMode ? "bg-blue-600/40 border border-blue-400/30 shadow-lg shadow-blue-500/20" : "bg-blue-600/20 border border-blue-500/40 shadow-sm shadow-blue-500/10") 
+                            : (darkMode ? "hover:bg-white/10" : "hover:bg-black/5")
+                        )}
+                      >
+                        <span className={cn("text-xl mt-0.5 transition-transform", selected === m.id && "scale-110")}>{m.icon}</span>
+                        <div className="flex-1 flex flex-col">
+                          <span className={cn(
+                            "text-sm font-bold",
+                            selected === m.id 
+                              ? (darkMode ? "text-blue-300" : "text-blue-700")
+                              : (darkMode ? "text-gray-200" : "text-gray-800")
+                          )}>
+                            {m.name}
+                          </span>
+                          <span className={cn(
+                            "text-xs mt-0.5",
+                            darkMode ? "text-gray-500" : "text-gray-500"
+                          )}>
+                            {m.desc}
+                          </span>
+                        </div>
+                        {selected === m.id && (
+                          <Check size={16} className={cn(
+                            "absolute right-3 top-1/2 -translate-y-1/2",
+                            darkMode ? "text-blue-400" : "text-blue-600"
+                          )} />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div className="p-1">
+                  <div className="max-h-60 overflow-y-auto custom-scrollbar">
+                    {customTemplates.map(m => (
+                      <div 
+                        key={m.id}
+                        className={cn(
+                          "w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left transition-all relative group backdrop-blur-xl transform-gpu will-change-[backdrop-filter]",
+                          selectedTemplateId === m.id 
+                            ? (darkMode ? "bg-blue-600/40 border border-blue-400/30 shadow-lg shadow-blue-500/20" : "bg-blue-600/20 border border-blue-500/40 shadow-sm shadow-blue-500/10") 
+                            : (darkMode ? "hover:bg-white/10" : "hover:bg-black/5")
+                        )}
+                      >
+                        <button 
+                          onClick={() => { onApplyTemplate(m.id, m.prompt); setIsOpen(false); }}
+                          className="flex-1 flex items-start gap-3 text-left"
+                        >
+                          <span className={cn("text-xl mt-0.5 transition-transform", selectedTemplateId === m.id && "scale-110")}>📝</span>
+                          <div className="flex-1 flex flex-col pr-24">
+                            <span className={cn(
+                              "text-sm font-bold",
+                              selectedTemplateId === m.id 
+                                ? (darkMode ? "text-blue-300" : "text-blue-700")
+                                : (darkMode ? "text-gray-200" : "text-gray-800")
+                            )}>
+                              {m.name}
+                            </span>
+                            <span className={cn(
+                              "text-xs mt-0.5 line-clamp-1",
+                              darkMode ? "text-gray-500" : "text-gray-500"
+                            )}>
+                              {m.prompt}
+                            </span>
+                          </div>
+                        </button>
+                        
+                        <div className={cn("flex items-center gap-1 transition-opacity absolute right-3 top-1/2 -translate-y-1/2", selectedTemplateId === m.id ? "opacity-100" : "opacity-100 md:opacity-0 md:group-hover:opacity-100")}>
+                          {selectedTemplateId === m.id && (
+                            <Check size={16} className={cn(
+                              darkMode ? "text-blue-400" : "text-blue-600", "mr-1"
+                            )} />
+                          )}
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); onEditTemplate(m); }}
+                            className="p-1.5 rounded-lg hover:bg-white/20 text-gray-400 hover:text-blue-400"
+                          >
+                            <FileEdit size={14} />
+                          </button>
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); onDeleteTemplate(m.id); }}
+                            className="p-1.5 rounded-lg hover:bg-white/20 text-gray-400 hover:text-red-400"
+                          >
+                            <Trash size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="pt-2 px-2 mt-1 border-t border-white/10">
+                    <button
+                   onClick={() => { setNewTemplateModal(true); setIsOpen(false); }}
+                      className={cn(
+                        "w-full py-2 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-all",
+                        darkMode ? "bg-white/10 hover:bg-white/20 text-white" : "bg-black/5 hover:bg-black/10 text-black"
+                      )}
+                    >
+                      <Plus size={16} />
+                      {lang === 'zh' ? '添加自定义模板' : 'Add Custom Template'}
+                    </button>
+                  </div>
+                </div>
+              )}
             </motion.div>
           </>
         )}
@@ -560,6 +685,13 @@ interface ChatInputAreaProps {
   isAgentMode: boolean;
   setIsAgentMode: (val: boolean) => void;
   lang: 'en' | 'zh';
+  onApplyTemplate: (templateId: string, prompt?: string) => void;
+  selectedTemplateId: string | null;
+  customTemplates: any[];
+  setNewTemplateModal: (val: boolean) => void;
+  onDeleteTemplate: (id: string) => void;
+  onEditTemplate: (template: any) => void;
+  activeTemplate: any;
 }
 
 const ChatInputArea = React.memo(({
@@ -575,7 +707,14 @@ const ChatInputArea = React.memo(({
   setShowCode,
   isAgentMode,
   setIsAgentMode,
-  lang
+  lang,
+  onApplyTemplate,
+  selectedTemplateId,
+  customTemplates,
+  setNewTemplateModal,
+  onDeleteTemplate,
+  onEditTemplate,
+  activeTemplate
 }: ChatInputAreaProps) => {
   const t = translations[lang];
   const [input, setInput] = useState("");
@@ -654,7 +793,7 @@ const ChatInputArea = React.memo(({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       className={cn(
-        "p-4 transition-all relative z-30",
+        "p-4 transition-all relative z-50",
         isInputExpanded ? "fixed inset-0 z-[100] flex flex-col pt-20 pb-4 px-4" : "relative",
         isInputExpanded && isMobile && "w-full"
       )}
@@ -813,12 +952,13 @@ const ChatInputArea = React.memo(({
             <button
               onClick={() => fileInputRef.current?.click()}
               className={cn(
-                "p-2 rounded-lg transition-colors flex items-center gap-1.5 text-xs font-medium",
-                darkMode ? "hover:bg-[#444] text-gray-400" : "hover:bg-gray-200 text-gray-500"
+                "p-1.5 md:p-2 rounded-lg transition-colors flex items-center gap-1.5 text-xs font-medium border border-transparent",
+                darkMode ? "hover:bg-[#444] text-gray-400 hover:border-white/10" : "hover:bg-gray-200 text-gray-500 hover:border-black/5"
               )}
-              title={t.attachFile}
+              title={lang === 'zh' ? '上传参考资料 (支持图片, PDF, Word段落)' : 'Upload reference (Img, PDF, Word)'}
             >
-              <Plus size={16} />
+              <Upload size={16} />
+              <span className="hidden sm:inline">{lang === 'zh' ? '参考资料' : 'Reference'}</span>
             </button>
             <ModelSelector 
               selected={selectedModel} 
@@ -827,6 +967,13 @@ const ChatInputArea = React.memo(({
               isAgentMode={isAgentMode}
               setIsAgentMode={setIsAgentMode}
               lang={lang}
+              onApplyTemplate={onApplyTemplate}
+              selectedTemplateId={selectedTemplateId}
+              customTemplates={customTemplates}
+              setNewTemplateModal={setNewTemplateModal}
+              onDeleteTemplate={onDeleteTemplate}
+              onEditTemplate={onEditTemplate}
+              activeTemplate={activeTemplate}
             />
             <button 
               onClick={() => setShowCode(!showCode)}
@@ -894,6 +1041,50 @@ export default function App() {
       turnHistory: []
     }
   ]);
+  const [customTemplates, setCustomTemplates] = useState<{id: string, name: string, desc?: string, prompt: string, attachments?: {name: string, type: string, data?: string, extractedText?: string}[]}[]>(() => {
+    const defaultEssayTemplate = {
+      id: "essay-migrated",
+      name: "作文格式",
+      prompt: "【系统指令：强制要求回复遵循作文格式】\n1. 标题：居中、深蓝色（#003399）、加粗、24号字体。标题内容必须符合格式：[作文标题]—姜亦铭。\n2. 正文：黑色（#000000）、12号字体、所有段落开头必须缩进两个全角空格（　　）。\n3. 段落间：不需要空行。\n请在回复中包含文档更新指令以符合此格式，并确保生成的文档标题包含“—姜亦铭”后缀。"
+    };
+    try { 
+      const saved = localStorage.getItem('customTemplates');
+      const hasMigrated = localStorage.getItem('essayMigrated');
+      let templates = saved ? JSON.parse(saved) : [];
+      
+      if (!hasMigrated) {
+        templates = [defaultEssayTemplate, ...templates.filter((t: any) => t.id !== 'essay')];
+        localStorage.setItem('essayMigrated', 'true');
+        localStorage.setItem('customTemplates', JSON.stringify(templates));
+      }
+      return templates;
+    } catch { 
+      return []; 
+    }
+  });
+  const [newTemplateModal, setNewTemplateModal] = useState(false);
+  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [newTemplateData, setNewTemplateData] = useState<{name: string, prompt: string, attachments?: {name: string, type: string, data?: string, extractedText?: string}[], error?: string}>({ name: '', prompt: '', attachments: [] });
+  const [isGeneratingTemplate, setIsGeneratingTemplate] = useState(false);
+  
+  useEffect(() => {
+    localStorage.setItem('customTemplates', JSON.stringify(customTemplates));
+  }, [customTemplates]);
+
+  const handleDeleteTemplate = (id: string) => {
+    if (window.confirm(lang === 'zh' ? '确定要删除这个模板吗？' : 'Delete this template?')) {
+      setCustomTemplates(prev => prev.filter(t => t.id !== id));
+      if (selectedTemplateId === id) setSelectedTemplateId(null);
+    }
+  };
+
+  const handleEditTemplate = (template: any) => {
+    setEditingTemplateId(template.id);
+    setNewTemplateData({ name: template.name, prompt: template.prompt, attachments: template.attachments || [] });
+    setNewTemplateModal(true);
+  };
+
   const [activeSessionId, setActiveSessionId] = useState<string>("initial");
   
   const activeSession = sessions.find(s => s.id === activeSessionId);
@@ -931,6 +1122,11 @@ export default function App() {
   }, [lastJson, showCode]);
 
   // Sync current active session data back to sessions array
+  const activeTemplate = useMemo(() => {
+    if (!selectedTemplateId) return null;
+    return customTemplates.find(t => t.id === selectedTemplateId);
+  }, [selectedTemplateId, customTemplates]);
+
   const syncSession = useCallback((
     sessionId: string,
     currentDocState: DocumentState, 
@@ -958,6 +1154,7 @@ export default function App() {
   const [isInputExpanded, setIsInputExpanded] = useState(false);
   const [activeDropdown, setActiveDropdown] = useState<'font' | 'align' | 'list' | 'color' | 'more' | 'fontFamily' | 'fontSize' | null>(null);
   const [isAgentMode, setIsAgentMode] = useState(false);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [agentState, setAgentState] = useState<{
     isActive: boolean;
     tasks: string[];
@@ -1024,6 +1221,7 @@ export default function App() {
     setCurrentDocId(null);
     setIsAgentMode(false);
     setShowCode(false);
+    setSelectedTemplateId(null);
     setHistory({ index: 0, stack: [INITIAL_DOC_STATE] });
   }, []);
 
@@ -1149,10 +1347,12 @@ export default function App() {
   const getAi = useCallback(() => {
     if (aiRef.current) return aiRef.current;
     
-    // Attempt to initialize AI
-    if (process.env.GEMINI_API_KEY) {
+    // Attempt multiple sources for the API key
+    const apiKey = process.env.GEMINI_API_KEY || (import.meta as any).env?.VITE_GEMINI_API_KEY;
+    
+    if (apiKey) {
       console.log("Lazy initializing AI with API Key...");
-      aiRef.current = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      aiRef.current = new GoogleGenAI({ apiKey });
       return aiRef.current;
     }
     return null;
@@ -1220,11 +1420,20 @@ export default function App() {
     
     if (!currentUser) return;
     try {
+      // Strip heavy data like base64 or File objects before saving to Firestore (1MB limit)
+      const cleanMsgs = currentMsgs.map(m => ({
+        ...m,
+        attachments: m.attachments?.map(a => {
+          const { data, file, ...rest } = a;
+          return rest;
+        })
+      }));
+
       const docData = {
         uid: currentUser.uid,
         title: state.title,
         content: JSON.stringify(state),
-        messages: JSON.stringify(currentMsgs),
+        messages: JSON.stringify(cleanMsgs),
         updatedAt: new Date().toISOString()
       };
 
@@ -1253,6 +1462,7 @@ export default function App() {
         setShowCode(existingSession.showCode);
         setIsAgentMode(existingSession.isAgentMode);
         setCurrentDocId(existingSession.currentDocId);
+        setSelectedTemplateId(null);
         setHistory({ index: 0, stack: [existingSession.docState] });
         setShowHistory(false);
         return;
@@ -1294,6 +1504,7 @@ export default function App() {
       setCurrentDocId(docItem.id);
       setIsAgentMode(false);
       setShowCode(false);
+      setSelectedTemplateId(null);
       setHistory({ index: 0, stack: [state] });
       setShowHistory(false);
     } catch (e) {
@@ -1483,8 +1694,8 @@ export default function App() {
     return obj;
   };
 
-const handleSendMessage = async (promptToUse: string, attachments: ChatAttachment[] = [], isRetry: boolean = false) => {
-    console.log("handleSendMessage called", { promptToUse, attachmentsCount: attachments.length, isRetry });
+  const handleSendMessage = async (promptToUse: string, attachments: ChatAttachment[] = [], isRetry: boolean = false, isSilent: boolean = false) => {
+    console.log("handleSendMessage called", { promptToUse, attachmentsCount: attachments.length, isRetry, isSilent });
     if ((!promptToUse.trim() && attachments.length === 0) || isCurrentSessionLoading) return;
 
     const ai = getAi();
@@ -1504,6 +1715,26 @@ const handleSendMessage = async (promptToUse: string, attachments: ChatAttachmen
     if (!session) return;
     const sessionDocId = session.currentDocId;
     let sessionShowCode = showCode;
+
+    // Inject template-specific instructions silently if a template is active
+    let finalPrompt = promptToUse;
+    let finalAttachments = [...attachments];
+    if (selectedTemplateId) {
+      const customTemplate = customTemplates.find(t => t.id === selectedTemplateId);
+      if (customTemplate) {
+        finalPrompt = `【系统指令：用户选用的模板指令】\n${customTemplate.prompt}\n\n${promptToUse}`;
+        if (customTemplate.attachments && customTemplate.attachments.length > 0) {
+          const templateAttachments = customTemplate.attachments.map(att => ({
+            id: Math.random().toString(36).substring(2, 15),
+            name: att.name,
+            type: att.type,
+            data: att.data,
+            extractedText: att.extractedText
+          }));
+          finalAttachments = [...finalAttachments, ...templateAttachments];
+        }
+      }
+    }
 
     // Save current state for undo turn
     if (!isRetry) {
@@ -1526,7 +1757,7 @@ const handleSendMessage = async (promptToUse: string, attachments: ChatAttachmen
         const reader = new FileReader();
         const timeout = setTimeout(() => {
           reject(new Error("File reading timed out"));
-        }, 10000); // 10 second timeout
+        }, 10000);
 
         reader.onload = () => {
           clearTimeout(timeout);
@@ -1545,7 +1776,7 @@ const handleSendMessage = async (promptToUse: string, attachments: ChatAttachmen
       return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
           reject(new Error("File processing timed out"));
-        }, 30000); // 30 second timeout for larger files
+        }, 30000);
 
         if (file.name.toLowerCase().endsWith('.docx') || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
           parseWordDoc(file).then(parsed => {
@@ -1608,7 +1839,7 @@ const handleSendMessage = async (promptToUse: string, attachments: ChatAttachmen
     };
 
     // Convert current attachments to base64 for the API call
-    const currentAttachmentsWithData = await Promise.all(attachments.map(async att => {
+    const currentAttachmentsWithData = await Promise.all(finalAttachments.map(async att => {
       if (att.file) {
         try {
           const processed = await processFileForApi(att.file);
@@ -1622,14 +1853,17 @@ const handleSendMessage = async (promptToUse: string, attachments: ChatAttachmen
     }));
 
     let currentMessages = [...session.messages];
-    if (!isRetry) {
-      // Store attachments WITHOUT the large base64 data in history
-      const historyAttachments = currentAttachmentsWithData.map(att => ({
+    if (!isRetry && !isSilent) {
+      const historyAttachments = currentAttachmentsWithData
+        .filter(att => attachments.some(a => a.id === att.id))
+        .map(att => ({
         id: att.id,
         name: att.name,
         type: att.type,
         previewUrl: att.previewUrl,
-        url: att.url
+        url: att.url,
+        data: att.data,
+        extractedText: att.extractedText
       }));
       const userMessage: ChatMessage = { role: "user", text: promptToUse, attachments: historyAttachments };
       currentMessages = [...currentMessages, userMessage];
@@ -1643,17 +1877,89 @@ const handleSendMessage = async (promptToUse: string, attachments: ChatAttachmen
 
     try {
       let currentDocState = session.docState;
-      
-      // We no longer parse Word documents from attachments into docState.
-      // The main document is uploaded via the central button.
-      // Attachments are treated as reference materials.
-
-        const userRequestText = promptToUse.trim() || (attachments.length > 0 ? "请处理我上传的文件并根据其内容更新文档。" : "");
+      const userRequestText = finalPrompt.trim() || (attachments.length > 0 ? "请处理我上传的文件并根据其内容更新文档。" : "");
       
       const attachmentContextText = attachments.length > 0 
-        ? `\n\n【用户上传的附件信息】\n系统识别到用户上传了 ${attachments.length} 个文件。在执行任务时，你必须仔细阅读并提取附件中的核心内容（如逐字录入、大纲提取等），不要忽略附件。\n请结合以下附件进行操作：\n` + 
+        ? `\n\n【用户上传的附件信息】\n系统识别到用户上传了 ${attachments.length} 个文件。\n` + 
           attachments.map(a => `- ${a.name} (${a.type})`).join("\n") + "\n\n"
         : "";
+
+      // Limit history to last 10 messages
+      let historyToKeep = currentMessages.slice(-10, -1);
+      
+      // Attempt to load base64 data for history images so the model doesn't lose context
+      historyToKeep = await Promise.all(historyToKeep.map(async (m) => {
+        if (!m.attachments || m.attachments.length === 0) return m;
+        const newAttachments = await Promise.all(m.attachments.map(async (att) => {
+          if (!att.data && att.url && att.type && !att.type.includes('wordprocessingml.document')) {
+            try {
+              const fetchRes = await fetch(att.url);
+              if (fetchRes.ok) {
+                const blob = await fetchRes.blob();
+                const base64 = await new Promise<string>((resolve, reject) => {
+                  const reader = new FileReader();
+                  reader.onloadend = () => {
+                    const result = reader.result as string;
+                    resolve(result.includes(',') ? result.split(',')[1] : result);
+                  };
+                  reader.onerror = reject;
+                  reader.readAsDataURL(blob);
+                });
+                return { ...att, data: base64 };
+              }
+            } catch (e) {
+              console.warn("Could not fetch history attachment data:", e);
+            }
+          }
+          return att;
+        }));
+        return { ...m, attachments: newAttachments };
+      }));
+      
+      const historyContents = historyToKeep.map((m) => {
+        return {
+          role: m.role,
+          parts: [
+            ...(m.attachments?.flatMap(att => {
+              const parts = [];
+              if (att.data && att.type && !att.type.includes('wordprocessingml.document')) {
+                parts.push({
+                  inlineData: {
+                    data: att.data,
+                    mimeType: att.type
+                  }
+                });
+              }
+              if (att.extractedText) {
+                parts.push({
+                  text: `[Reference Document Content - ${att.name}]:\n${att.extractedText}`
+                });
+              }
+              parts.push({
+                text: `[Uploaded File: ${att.url || `attachment://${att.id}`}] (File Name: ${att.name})`
+              });
+              return parts;
+            }) || []),
+            { text: m.text || (m.role === 'user' && m.attachments && m.attachments.length > 0 ? "（上传了文件）" : "") }
+          ]
+        };
+      });
+
+      const executeWithCancel = <T,>(promise: Promise<T>): Promise<T> => {
+        return new Promise((resolve, reject) => {
+          let checkInterval: any = null;
+          promise.then(
+            (val) => { clearInterval(checkInterval); resolve(val); },
+            (err) => { clearInterval(checkInterval); reject(err); }
+          );
+          checkInterval = setInterval(() => {
+            if (agentCancelRef.current) {
+              clearInterval(checkInterval);
+              reject(new Error("CANCELLED_BY_USER"));
+            }
+          }, 200);
+        });
+      };
 
       if (isAgentMode) {
         agentCancelRef.current = false;
@@ -1662,25 +1968,35 @@ const handleSendMessage = async (promptToUse: string, attachments: ChatAttachmen
         if (activeSessionIdRef.current === sessionId) setMessages(addModelPlaceholder);
         setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, messages: addModelPlaceholder(s.messages) } : s));
         
-        const outlinePrompt = `You are a Planner Agent. The user wants to generate a large document or perform a complex task based on their request, the current document state, and any attached files.
+        const outlinePrompt = `You are a Planner Agent. The user wants to perform a task based on their request, the current document state, and any attached files.
+
 USER REQUEST: ${userRequestText}
 
-CURRENT DOCUMENT STATE:
+CURRENT DOCUMENT STATE (if any):
 ${JSON.stringify(currentDocState)}
 
-Your goal is to break this request into a sequence of highly granular, manageable tasks to ensure maximum detail and avoid AI laziness.
+Your goal is to break this request down into a sequence of highly granular, manageable sequential tasks.
 
 CRITICAL RULES:
-1. YOU MUST NEVER OUTPUT A SINGLE TASK. Even if the user request seems simple or focuses on a single section, you MUST break it down into AT LEAST 2-3 logical steps (e.g., "Step 1: Draft the first half of the section", "Step 2: Draft the second half", "Step 3: Review and refine"). If you output a single task, you have failed.
-2. If the user request contains a long list of items, sections, or points to expand, YOU MUST CREATE A SEPARATE TASK FOR EACH SECTION OR ITEM. Do not group them all into one task.
-3. Each task should focus on a specific section, a specific set of points, or a specific range of content.
-4. Tasks must be strictly sequential and collectively cover the entire user request without gaps.
-5. For complex requests, aim for 5-12 granular tasks.
+1. EXPLICITLY ANALYZE USER INTENT FIRST: Look closely at the user request and history. What exactly are they asking to do? Are they asking to fill in blanks? Extract data? Translate? Summarize? Write code? Note the EXACT domain and requirement.
+2. YOU MUST NEVER OUTPUT A SINGLE TASK. Even if the request is short, break it into AT LEAST 2-3 logical steps (e.g., process section 1, process section 2).
+3. If the user request contains a long list of items, images, or sections, CREATE A SEPARATE TASK FOR EACH chunk. Do not group them all into one task.
+4. Keep the wording of your sub-tasks aligned perfectly with the user's intent. Pass along any specific formatting or logic rules the user requested to each sub-task.
+5. Output your analysis first, and then AT THE VERY END, output ONLY a valid JSON array of strings containing the tasks. Do not output markdown around the JSON.
 
-Output ONLY a valid JSON array of strings, where each string is a specific, detailed task description for the Writer Agent. Do not output markdown code blocks, just the JSON array.
-Example: ["Write a detailed Introduction and Background", "Develop the first main chapter: Market Trends", "Develop the second main chapter: Competitive Landscape", "Write the detailed Conclusion and Recommendations"]`;
+Example Output format:
+ANALYSIS:
+The user wants to process a list of 20 items from the uploaded image and translate them into Spanish, keeping the original layout.
+
+TASKS:
+[
+  "Process items 1-10 from the image: translate to Spanish while keeping the original layout.",
+  "Process items 11-20 from the image: translate to Spanish while keeping the original layout.",
+  "Review translations and ensure all formatting is correct."
+]`;
 
         const outlineContents = [
+          ...historyContents,
           {
             role: "user",
             parts: [
@@ -1715,7 +2031,7 @@ Example: ["Write a detailed Introduction and Background", "Develop the first mai
         while (outlineRetries < maxOutlineRetries) {
           try {
             // Use standard request format for better compatibility
-            outlineResponse = await ai.models.generateContent({
+            outlineResponse = await executeWithCancel(ai.models.generateContent({
               model: selectedModel,
               contents: outlineContents as any,
               config: {
@@ -1723,7 +2039,7 @@ Example: ["Write a detailed Introduction and Background", "Develop the first mai
                 // Prefer parsing it from the text if it fails or just be safe
                 temperature: 0.1,
               }
-            });
+            }));
             break;
           } catch (error: any) {
             if (error.status === 429 && outlineRetries < maxOutlineRetries) {
@@ -1734,10 +2050,10 @@ Example: ["Write a detailed Introduction and Background", "Develop the first mai
               // Try without responseMimeType if 403 occurs, just in case
               console.warn("403 error on outline generation, retrying with simpler config...");
               try {
-            outlineResponse = await ai.models.generateContent({
+            outlineResponse = await executeWithCancel(ai.models.generateContent({
                   model: selectedModel,
                   contents: outlineContents as any,
-                });
+                }));
                 break;
               } catch (innerError) {
                 console.error("Failed even with simple config:", innerError);
@@ -1753,8 +2069,13 @@ Example: ["Write a detailed Introduction and Background", "Develop the first mai
         if (!outlineResponse) throw new Error("Failed to generate outline");
 
         let tasks: string[] = [];
+        let analysisText = "";
         try {
           let rawText = outlineResponse.text || "[]";
+          const analysisMatch = rawText.match(/ANALYSIS:\s*([\s\S]*?)(TASKS:|\[)/i);
+          if (analysisMatch && analysisMatch[1]) {
+            analysisText = "【Agent 思考过程】\n" + analysisMatch[1].trim() + "\n\n";
+          }
           const match = rawText.match(/\[[\s\S]*\]/);
           if (match) {
             rawText = match[0];
@@ -1770,7 +2091,7 @@ Example: ["Write a detailed Introduction and Background", "Develop the first mai
 
         // --- PHASE 2: WRITER LOOP ---
         let loopDocState = currentDocState;
-        let finalFullText = `已自动拆分为 ${tasks.length} 个子任务：\n` + tasks.map((t, i) => `${i + 1}. ${t}`).join('\n') + '\n\n';
+        let finalFullText = analysisText + `已自动拆分为 ${tasks.length} 个子任务：\n` + tasks.map((t, i) => `${i + 1}. ${t}`).join('\n') + '\n\n';
         
         for (let i = 0; i < tasks.length; i++) {
           if (agentCancelRef.current) break;
@@ -1785,25 +2106,27 @@ Example: ["Write a detailed Introduction and Background", "Develop the first mai
           if (activeSessionIdRef.current === sessionId) setMessages(updateMessageText);
           setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, messages: updateMessageText(s.messages) } : s));
 
-          const taskPrompt = `You are a Writer Agent. We are generating a document step by step to ensure high quality and avoid laziness.
+          const taskPrompt = `We are completing a complex task step by step to ensure high quality and avoid laziness.
 OVERALL GOAL: ${userRequestText}
 PROGRESS: Task ${i + 1} of ${tasks.length}
 COMPLETED TASKS SO FAR: ${i > 0 ? tasks.slice(0, i).join(' -> ') : 'None'}
 CURRENT DOCUMENT STATE: ${JSON.stringify(loopDocState)}
 YOUR CURRENT TASK: ${task}
 
-Please generate ONLY the content for your current task. 
+Please execute ONLY your current task. 
 CRITICAL INSTRUCTIONS:
-1. **NO LAZINESS**: You must provide full, rich, and detailed content. If the task asks for expansion, you MUST add significant new details, examples, and explanations. Do NOT just copy the source material or current document state.
-2. **USE REFERENCE MATERIALS**: If the user uploaded reference materials, you MUST actively search through them to find relevant information, quotes, or examples to enrich your writing. Do not just rely on your internal knowledge.
-3. **NO PLACEHOLDERS**: Never use "..." or "[Content continues...]" or similar. Write everything out.
-4. **CONTEXT**: Maintain perfect consistency with the existing document state.
-5. **OUTPUT FORMAT**: 
+1. **NO LAZINESS**: You must provide full, rich, and detailed content. If the task requires processing many items, process ALL of them.
+2. **ADHERE TO TASK**: Read your task description carefully. Do exactly what it says. You MUST adhere to the overall goal and keep any required formats.
+3. **USE REFERENCE MATERIALS**: If the user uploaded reference materials, you MUST actively use them to complete your task.
+4. **NO PLACEHOLDERS**: Never use "..." or "[Content continues...]" or similar. Write everything out completely.
+5. **CONTEXT**: Maintain perfect consistency with the existing document state.
+6. **OUTPUT FORMAT**: 
    - First, provide a brief explanation of what you are doing for this task in Chinese.
    - Then, provide the JSON update in a markdown code block (e.g., \`\`\`json ... \`\`\`).
-   - Use type: "append" to add content to the end of the document, or "full" if you need to restructure or modify existing content. If modifying existing content, ensure you are actually expanding/improving it, not just repeating it.`;
+   - Use type: "append" to add content to the end of the document, or "full" if you need to restructure or modify existing content.`;
 
           const taskContents = [
+            ...historyContents,
             {
               role: "user",
               parts: [
@@ -1837,13 +2160,13 @@ CRITICAL INSTRUCTIONS:
           const maxRetries = 3;
           while (retries < maxRetries) {
             try {
-              taskResponseStream = await ai.models.generateContentStream({
+              taskResponseStream = await executeWithCancel(ai.models.generateContentStream({
                 model: selectedModel,
                 contents: taskContents as any,
                 config: {
                   systemInstruction: SYSTEM_INSTRUCTION,
                 }
-              });
+              }));
               break;
             } catch (error: any) {
               if (error.status === 429 && retries < maxRetries) {
@@ -1924,22 +2247,8 @@ CRITICAL INSTRUCTIONS:
       } else {
         const contextPrompt = `CURRENT DOCUMENT STATE: ${JSON.stringify(currentDocState)}\n\nUSER REQUEST: ${userRequestText}`;
 
-        // Limit history to last 10 messages and remove images from older messages to save memory
-        const historyToKeep = currentMessages.slice(-10, -1);
-        
         const contents = [
-          ...historyToKeep.map((m, idx) => {
-            // Note: History messages no longer have 'data' (base64) to save memory
-            return {
-              role: m.role,
-              parts: [
-                ...(m.attachments?.map(att => ({
-                  text: `[Uploaded Image URL: ${att.url || `attachment://${att.id}`}] (File Name: ${att.name})`
-                })) || []),
-                { text: m.text || (m.role === 'user' && m.attachments && m.attachments.length > 0 ? "（上传了文件）" : "") }
-              ]
-            };
-          }),
+          ...historyContents,
           {
             role: "user",
             parts: [
@@ -2139,6 +2448,19 @@ CRITICAL INSTRUCTIONS:
       saveCurrentDoc(finalDocState, finalMessages, sessionDocId);
       }
     } catch (error: any) {
+      if (error?.message === "CANCELLED_BY_USER") {
+        const updater = (prev: ChatMessage[]): ChatMessage[] => {
+          const newMsgs = [...prev];
+          if (newMsgs.length > 0 && newMsgs[newMsgs.length-1].role === "model") {
+             newMsgs[newMsgs.length-1] = { ...newMsgs[newMsgs.length-1], text: newMsgs[newMsgs.length-1].text + "\n\n⚠️ **" + (lang === 'zh' ? "深度生成已取消。" : "Deep generation cancelled.") + "**", isStreaming: false };
+          }
+          return newMsgs;
+        };
+        if (activeSessionIdRef.current === sessionId) setMessages(updater);
+        setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, messages: updater(s.messages) } : s));
+        return;
+      }
+
       console.error("AI Error:", error);
       const errorUpdater = (prev: ChatMessage[]): ChatMessage[] => {
         const newMessages = [...prev];
@@ -2168,6 +2490,127 @@ CRITICAL INSTRUCTIONS:
       setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, messages: errorUpdater(s.messages) } : s));
     } finally {
       setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, isLoading: false } : s));
+    }
+  };
+
+  const handleApplyTemplate = useCallback((templateId: string) => {
+    setSelectedTemplateId(prev => prev === templateId ? null : templateId);
+  }, []);
+
+  const handleAutoFillTemplate = async () => {
+    if (isGeneratingTemplate) return;
+    const ai = getAi();
+    if (!ai) {
+      setNewTemplateData(prev => ({ ...prev, error: lang === 'zh' ? 'AI 未初始化' : 'AI not initialized' }));
+      return;
+    }
+    
+    setIsGeneratingTemplate(true);
+    setNewTemplateData(prev => ({ ...prev, error: undefined }));
+
+    try {
+      const parts: any[] = [];
+      const hasAttachments = newTemplateData.attachments && newTemplateData.attachments.length > 0;
+      
+      if (hasAttachments) {
+        newTemplateData.attachments!.forEach(att => {
+          if (att.data && att.type) {
+            parts.push({
+              inlineData: {
+                data: att.data,
+                mimeType: att.type
+               }
+            });
+          }
+          if (att.extractedText) {
+            parts.push({
+              text: `[Reference Document Content - ${att.name}]:\n${att.extractedText}`
+            });
+          }
+        });
+      }
+
+      let promptText = `Please help me EXPAND and IMPROVE a template's instructions. You are a professional prompt engineer.`;
+      if (newTemplateData.name) {
+        promptText += `\nThe template name is: "${newTemplateData.name}".`;
+      }
+      if (newTemplateData.prompt) {
+        promptText += `\nCurrent base instruction: "${newTemplateData.prompt}". Please elaborate on this, adding specific formatting rules, tone requirements, and content structure.`;
+      }
+      if (hasAttachments) {
+        promptText += `\nI have uploaded reference files. Extract the precise structure (headings, bullet points, styles) and generate detailed instructions so the AI can mimic this document's format exactly.`;
+      }
+
+      promptText += `\n\nYou MUST return your answer strictly as a valid JSON object with the following structure:
+{
+  "name": "A refined name if needed, else keep original",
+  "prompt": "Highly detailed, structured system instructions explaining EXACTLY how to generate documents in this specific format."
+}
+Return ONLY the JSON. No conversation. The language MUST be ${lang === 'zh' ? 'Chinese (Simplified)' : 'English'}.`;
+
+      parts.push({ text: promptText });
+
+      const response = await ai.models.generateContent({
+        model: selectedModel,
+        contents: [{ role: 'user', parts }],
+        config: { temperature: 0.2 }
+      });
+
+      const responseText = response.text || "";
+      let jsonStr = responseText.replace(/```json/g, "").replace(/```/g, "").trim();
+      const parsed = JSON.parse(jsonStr);
+
+      if (parsed.name || parsed.prompt) {
+        setNewTemplateData(prev => ({
+          ...prev,
+          name: parsed.name || prev.name,
+          prompt: parsed.prompt || prev.prompt
+        }));
+      }
+
+    } catch (e: any) {
+      console.error(e);
+      setNewTemplateData(prev => ({ ...prev, error: lang === 'zh' ? 'AI 填充失败: ' + e.message : 'AI auto-fill failed: ' + e.message }));
+    } finally {
+      setIsGeneratingTemplate(false);
+    }
+  };
+
+  const handleGenerateNameOnly = async () => {
+    // Basic check - if no prompt and no attachments, we can't summarize
+    if (isGeneratingTemplate || (!newTemplateData.prompt.trim() && !newTemplateData.attachments?.length)) return;
+    const ai = getAi();
+    if (!ai) return;
+
+    setIsGeneratingTemplate(true);
+    try {
+      let contextStr = newTemplateData.prompt;
+      if (newTemplateData.attachments?.length) {
+        contextStr += "\nAttached files: " + newTemplateData.attachments.map(a => a.name).join(", ");
+      }
+
+      const promptText = `Based on these document generation instructions or attached references, suggest a very short and concise name (MAX 5-6 characters in Chinese, or 3-4 words in English) for this template. 
+Examples: "日报模板", "合同初稿", "会议纪要".
+
+Context:
+"${contextStr}"
+
+Return ONLY the suggested name text, no punctuation, no quotes. The language MUST be ${lang === 'zh' ? 'Chinese (Simplified)' : 'English'}.`;
+
+      const response = await ai.models.generateContent({
+        model: selectedModel,
+        contents: [{ role: 'user', parts: [{ text: promptText }] }],
+        config: { temperature: 0.3 }
+      });
+
+      const suggestedName = response.text?.trim() || "";
+      if (suggestedName) {
+        setNewTemplateData(prev => ({ ...prev, name: suggestedName }));
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsGeneratingTemplate(false);
     }
   };
 
@@ -2221,7 +2664,7 @@ CRITICAL INSTRUCTIONS:
   };
 
   const handleExport = () => {
-    handleDownload(docState);
+    handleDownload(docState, activeSessionId);
   };
 
   const handleReset = () => {
@@ -2504,8 +2947,11 @@ CRITICAL INSTRUCTIONS:
     return src;
   };
 
-  const handleDownload = async (stateToDownload?: DocumentState) => {
+  const handleDownload = async (stateToDownload?: DocumentState, sessionId?: string) => {
     const state = stateToDownload || docState;
+    const trackingId = sessionId || activeSessionId;
+    if (downloadingId) return; // Prevent concurrent downloads of same state
+    setDownloadingId(trackingId);
     
     const resolveImageForWord = async (src: string, alt?: string): Promise<Uint8Array | string | null> => {
       let finalSrc = src;
@@ -2589,7 +3035,14 @@ CRITICAL INSTRUCTIONS:
       return null;
     };
 
-    await generateWordDoc(state, resolveImageForWord);
+    try {
+      await generateWordDoc(state, resolveImageForWord);
+    } catch (e: any) {
+      console.error("Download failed:", e);
+      alert(lang === 'zh' ? "下载失败: " + (e.message || "未知错误") : "Download failed: " + (e.message || "Unknown error"));
+    } finally {
+      setDownloadingId(null);
+    }
   };
 
   const handleTextEdit = (sIdx: number, pIdx: number, rIdx: number, newText: string | null, cellInfo?: { r: number, c: number, cp: number, cr: number }) => {
@@ -2647,14 +3100,14 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                   (/^\\[a-zA-Z]+/.test(processedText.trim()) && processedText.includes('{'));
   
   if (hasMathIndicators && !isFocused) {
-    // If it has LaTeX but no $, wrap it in $$ for rendering
-    const renderText = (processedText.includes('$')) ? processedText : `$$${processedText}$$`;
+    // If it has LaTeX but no $, wrap it in $ for rendering inline
+    const renderText = (processedText.includes('$')) ? processedText : `$${processedText}$`;
     
     return (
       <span className={cn("inline-block", className)} style={style} data-sidx={sIdx} data-pidx={pIdx} data-ridx={rIdx}>
         <Markdown 
           remarkPlugins={[remarkMath]} 
-          rehypePlugins={[[rehypeKatex, { strict: false }]]}
+          rehypePlugins={[rehypeKatex]}
           components={{
             p: ({ children }: any) => <span className="inline-block">{children}</span>
           }}
@@ -3280,14 +3733,15 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                     activeSessionId === s.id ? "opacity-100" : "opacity-0 group-hover:opacity-100"
                   )}>
                     <button 
-                      onClick={(e) => { e.stopPropagation(); handleDownload(s.docState); }}
+                      onClick={(e) => { e.stopPropagation(); handleDownload(s.docState, s.id); }}
                       className={cn(
                         "p-1.5 rounded transition-colors flex items-center justify-center",
                         activeSessionId === s.id ? "hover:bg-white/20 text-white" : "hover:bg-black/10 text-gray-500"
                       )}
                       title={t.export}
+                      disabled={downloadingId === s.id}
                     >
-                      <Download size={16} />
+                      {downloadingId === s.id ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
                     </button>
 
                 <button 
@@ -3358,6 +3812,9 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
         </div>
       </header>
 
+      {/* Global Top Blur to prevent flickering when tabs switch */}
+      <TopBlur darkMode={darkMode} isAgentMode={isAgentMode} />
+
       {/* Session Tabs - Global */}
       <div className="hidden">
         {/* Removed from here, moved into header */}
@@ -3407,17 +3864,16 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
         <div className={cn(
           "flex flex-col h-full relative z-10 w-full"
         )}>
-          {/* Chat Side Blur */}
-          <TopBlur darkMode={darkMode} isAgentMode={isAgentMode} />
-
-          <div className="flex-1 overflow-y-auto custom-scrollbar pt-[120px] md:pt-[80px] pb-4 z-10 pointer-events-auto relative">
-          <AnimatePresence>
+          <div className="flex-1 overflow-hidden z-10 pointer-events-auto relative">
+          <AnimatePresence initial={false}>
             {showHistory ? (
               <motion.div 
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                className="p-4 space-y-3"
+                key="history"
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.98 }}
+                transition={{ duration: 0.2, ease: "easeOut" }}
+                className="absolute inset-0 overflow-y-auto custom-scrollbar pt-[120px] md:pt-[80px] pb-[240px] p-4 space-y-3 bg-transparent z-20"
               >
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-sm font-bold uppercase tracking-wider opacity-60">{t.savedDocs}</h2>
@@ -3453,7 +3909,14 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                 )}
               </motion.div>
             ) : (
-              <div className="p-4 space-y-4">
+              <motion.div 
+                key="chat"
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.98 }}
+                transition={{ duration: 0.2, ease: "easeOut" }}
+                className="absolute inset-0 overflow-y-auto custom-scrollbar pt-[120px] md:pt-[80px] pb-[240px] p-4 space-y-4"
+              >
                 {messages.length === 0 && (
                   <div className="flex flex-col items-center justify-center h-full text-center space-y-4 px-8 py-10">
                     <div className="w-14 h-14 bg-blue-100 dark:bg-blue-900/50 rounded-full flex items-center justify-center mb-2 shadow-lg">
@@ -3482,7 +3945,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                         )}>
                           <Upload className="text-blue-600 dark:text-blue-400" size={20} />
                           <span className="text-base font-semibold text-gray-800 dark:text-gray-100">
-                            {lang === 'zh' ? '上传 Word 文档' : 'Upload Word Document'}
+                            {lang === 'zh' ? '上传 Word (.docx) 文档' : 'Upload Word (.docx) Document'}
                           </span>
                         </div>
                       </label>
@@ -3709,7 +4172,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                   </div>
                 )}
                 <div ref={chatEndRef} />
-              </div>
+              </motion.div>
             )}
           </AnimatePresence>
           </div>
@@ -3769,6 +4232,13 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                 isAgentMode={isAgentMode}
                 setIsAgentMode={setIsAgentMode}
                 lang={lang}
+                onApplyTemplate={handleApplyTemplate}
+                selectedTemplateId={selectedTemplateId}
+                customTemplates={customTemplates}
+                setNewTemplateModal={setNewTemplateModal}
+                onDeleteTemplate={handleDeleteTemplate}
+                onEditTemplate={handleEditTemplate}
+                activeTemplate={activeTemplate}
               />
             </div>
           </div>
@@ -3808,18 +4278,15 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
           isMobile && activeTab !== "preview" && "pointer-events-none"
         )}
       >
-        {/* Document Side Blur */}
-        <TopBlur darkMode={darkMode} isAgentMode={isAgentMode} />
-
         {/* Document Sandbox */}
         <div className={cn(
-          "flex-1 overflow-y-auto p-4 md:p-12 pt-[120px] md:pt-[80px] custom-scrollbar transition-colors duration-500 z-10 relative",
+          "flex-1 overflow-y-auto px-4 md:px-12 pt-[120px] md:pt-[80px] pb-[240px] custom-scrollbar transition-colors duration-500 z-10 relative",
           "bg-transparent"
         )}>
           {/* Document Toolbar - Subheader */}
           {!isInputExpanded && (
             <div className={cn(
-                "z-30 h-[44px] mb-6 flex justify-center w-full pointer-events-none",
+                "z-30 h-[44px] mb-16 flex justify-center w-full pointer-events-none relative",
                 (isMobile && !isLandscape) ? "sticky top-[60px]" : "sticky top-[5px]"
             )}>
               <div 
@@ -3831,7 +4298,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                   }
                 }}
                 className={cn(
-                  "absolute top-0 left-1/2 -translate-x-1/2 z-30 min-h-[44px] py-[6px] flex flex-col justify-start items-center px-2 md:px-4 shrink-0 shadow-sm rounded-2xl pointer-events-auto transform-gpu will-change-[height]",
+                  "absolute top-0 left-1/2 -translate-x-1/2 z-30 min-h-[44px] py-[6px] flex flex-col justify-start items-center px-2 md:px-4 shrink-0 shadow-sm rounded-2xl pointer-events-auto transform-gpu will-change-[height] backdrop-blur-xl",
                   (isMobile && !isLandscape) 
                     ? "w-max max-w-[96vw]" 
                     : "w-max max-w-[95%]",
@@ -3932,234 +4399,62 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                     <div className="w-px h-3 bg-gray-300 dark:bg-gray-600 mx-0.5" />
                     
                     {/* Alignment Dropdown */}
-                    <div className="relative">
-                      <button 
-                        onClick={() => setActiveDropdown(activeDropdown === 'align' ? null : 'align')}
-                        className={cn(
-                          "flex items-center gap-0.5 p-1 rounded transition-colors",
-                          activeDropdown === 'align'
-                            ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
-                            : "hover:bg-gray-100 dark:hover:bg-[#333] text-inherit"
-                        )}
-                        title="Alignment"
-                      >
-                        {(() => {
-                          const align = focusedPara ? focusedPara.alignment : 'left';
-                          switch(align) {
-                            case 'center': return <AlignCenter size={15} />;
-                            case 'right': return <AlignRight size={15} />;
-                            case 'justify': return <AlignJustify size={15} />;
-                            default: return <AlignLeft size={15} />;
-                          }
-                        })()}
-                        <ChevronDown size={10} className={cn("transition-transform duration-200 opacity-50", activeDropdown === 'align' ? "rotate-180" : "")} />
-                      </button>
-                      <AnimatePresence>
-                        {activeDropdown === 'align' && (
-                          <motion.div 
-                            initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                            animate={{ opacity: 1, y: 0, scale: 1 }}
-                            exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                            transition={{ duration: 0.1 }}
-                            className={cn(
-                              "absolute top-full mt-2 left-1/2 -translate-x-1/2 rounded-xl shadow-2xl z-50 p-2 backdrop-blur-2xl flex gap-1 transform-gpu",
-                              darkMode ? "bg-black/80 border border-white/10 text-white" : "bg-white/95 border border-black/10 text-gray-900"
-                            )}
-                          >
-                            {['left', 'center', 'right', 'justify'].map(al => {
-                               const Icon = al === 'center' ? AlignCenter : al === 'right' ? AlignRight : al === 'justify' ? AlignJustify : AlignLeft;
-                               return (
-                                 <button key={al} onClick={() => { updateFocusedBlock({ alignment: al }); setActiveDropdown(null); }} className={cn("p-1.5 rounded transition-colors border border-transparent", focusedPara?.alignment === al || (!focusedPara?.alignment && al === 'left') ? "bg-blue-500 text-white shadow-sm" : "hover:bg-black/5 dark:hover:bg-white/10")} title={`Align ${al}`}><Icon size={16} /></button>
-                               );
-                            })}
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
+                    <button 
+                      onClick={() => setActiveDropdown(activeDropdown === 'align' ? null : 'align')}
+                      className={cn(
+                        "flex items-center gap-0.5 p-1 rounded transition-colors",
+                        activeDropdown === 'align'
+                          ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
+                          : "hover:bg-gray-100 dark:hover:bg-[#333] text-inherit"
+                      )}
+                      title="Alignment"
+                    >
+                      {(() => {
+                        const align = focusedPara ? focusedPara.alignment : 'left';
+                        switch(align) {
+                          case 'center': return <AlignCenter size={15} />;
+                          case 'right': return <AlignRight size={15} />;
+                          case 'justify': return <AlignJustify size={15} />;
+                          default: return <AlignLeft size={15} />;
+                        }
+                      })()}
+                      <ChevronDown size={10} className={cn("transition-transform duration-200", activeDropdown === 'align' ? "text-black dark:text-white rotate-180" : "text-gray-400")} />
+                    </button>
 
                     {/* Color Dropdown */}
-                    <div className="relative">
-                      <button 
-                        onClick={() => setActiveDropdown(activeDropdown === 'color' ? null : 'color')}
-                        className={cn(
-                          "flex items-center gap-0.5 p-1 rounded transition-colors",
-                          activeDropdown === 'color'
-                            ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
-                            : "hover:bg-gray-100 dark:hover:bg-[#333] text-inherit"
-                        )}
-                        title="Font Color"
-                      >
-                        <Palette size={15} style={{ color: focusedPara ? (focusedPara.color || 'inherit') : 'inherit' }} />
-                        <ChevronDown size={10} className={cn("transition-transform duration-200 opacity-50", activeDropdown === 'color' ? "rotate-180" : "")} />
-                      </button>
-                      <AnimatePresence>
-                        {activeDropdown === 'color' && (
-                          <motion.div 
-                            initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                            animate={{ opacity: 1, y: 0, scale: 1 }}
-                            exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                            transition={{ duration: 0.1 }}
-                            className={cn(
-                              "absolute top-full mt-2 left-1/2 -translate-x-1/2 rounded-xl shadow-2xl z-50 p-2 backdrop-blur-2xl flex gap-2 w-max transform-gpu",
-                              darkMode ? "bg-black/80 border border-white/10 text-white" : "bg-white/95 border border-black/10 text-gray-900"
-                            )}
-                          >
-                            {[
-                               { name: "De", value: "" }, { name: "Black", value: "#000000" }, { name: "Red", value: "#FF0000" },
-                               { name: "Blue", value: "#2563EB" }, { name: "Green", value: "#16A34A" }, { name: "Gray", value: "#6B7280" },
-                             ].map(color => (
-                               <button
-                                 key={color.name}
-                                 onClick={() => { updateFocusedBlock({ color: color.value || undefined }); setActiveDropdown(null); }}
-                                 className={cn("w-6 h-6 rounded-full border transition-transform hover:scale-110 flex items-center justify-center text-[8px]", focusedPara?.color === color.value || (!focusedPara?.color && color.value === "") ? "scale-125 ring-2 ring-blue-500 shadow-sm" : "")}
-                                 style={{ backgroundColor: color.value || 'transparent', borderColor: color.value ? 'transparent' : (darkMode ? '#444' : '#e5e7eb') }}
-                                 title={color.name}
-                               >
-                                 {color.value === "" && "De"}
-                               </button>
-                             ))}
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
+                    <button 
+                      onClick={() => setActiveDropdown(activeDropdown === 'color' ? null : 'color')}
+                      className={cn(
+                        "flex items-center gap-0.5 p-1 rounded transition-colors",
+                        activeDropdown === 'color'
+                          ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
+                          : "hover:bg-gray-100 dark:hover:bg-[#333] text-inherit"
+                      )}
+                      title="Font Color"
+                    >
+                      <Palette size={15} style={{ color: focusedPara ? (focusedPara.color || 'inherit') : 'inherit' }} />
+                      <ChevronDown size={10} className={cn("transition-transform duration-200", activeDropdown === 'color' ? "text-black dark:text-white rotate-180" : "text-gray-400")} />
+                    </button>
 
                     <div className="w-px h-3 bg-gray-300 dark:bg-gray-600 mx-0.5" />
                     
                     {/* Lists Dropdown */}
-                    <div className="relative">
-                      <button 
-                        onClick={() => setActiveDropdown(activeDropdown === 'list' ? null : 'list')}
-                        className={cn(
-                          "flex items-center gap-0.5 p-1 rounded transition-colors",
-                          activeDropdown === 'list'
-                            ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
-                            : "hover:bg-gray-100 dark:hover:bg-[#333] text-inherit"
-                        )}
-                        title="Lists"
-                      >
-                        {(() => {
-                          if (focusedPara?.isNumbering) return <ListOrdered size={15} />;
-                          return <List size={15} />;
-                        })()}
-                        <ChevronDown size={10} className={cn("transition-transform duration-200 opacity-50", activeDropdown === 'list' ? "rotate-180" : "")} />
-                      </button>
-                      <AnimatePresence>
-                        {activeDropdown === 'list' && (
-                          <motion.div 
-                            initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                            animate={{ opacity: 1, y: 0, scale: 1 }}
-                            exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                            transition={{ duration: 0.1 }}
-                            className={cn(
-                              "absolute top-full mt-2 left-1/2 -translate-x-1/2 rounded-xl shadow-2xl z-50 p-2 backdrop-blur-2xl flex gap-1 transform-gpu",
-                              darkMode ? "bg-black/80 border border-white/10 text-white" : "bg-white/95 border border-black/10 text-gray-900"
-                            )}
-                          >
-                            <button onClick={() => { updateFocusedBlock({ isBullet: 'toggle' }); setActiveDropdown(null); }} className={cn("p-1.5 rounded transition-colors border border-transparent", focusedPara?.isBullet ? "bg-blue-500 text-white shadow-sm" : "hover:bg-black/5 dark:hover:bg-white/10")} title="Bullet List"><List size={16} /></button>
-                            <button onClick={() => { updateFocusedBlock({ isNumbering: 'toggle' }); setActiveDropdown(null); }} className={cn("p-1.5 rounded transition-colors border border-transparent", focusedPara?.isNumbering ? "bg-blue-500 text-white shadow-sm" : "hover:bg-black/5 dark:hover:bg-white/10")} title="Numbered List"><ListOrdered size={16} /></button>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-
-                    <div className="w-px h-3 bg-gray-300 dark:bg-gray-600 mx-0.5" />
-                    
-                    {/* Font Family Dropdown */}
-                    <div className="relative">
-                      <button
-                        onClick={() => setActiveDropdown(activeDropdown === 'fontFamily' ? null : 'fontFamily')}
-                        className={cn(
-                          "flex items-center gap-0.5 p-1 rounded transition-colors",
-                          activeDropdown === 'fontFamily' 
-                            ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
-                            : "hover:bg-gray-100 dark:hover:bg-[#333] text-inherit"
-                        )}
-                      >
-                        <Type size={14} className="opacity-50" />
-                        <span className="text-[11px] md:text-xs truncate w-[50px] md:w-[70px] text-left ml-1">
-                          {focusedPara?.fontFamily ? (focusedPara.fontFamily.split(',')[0].replace(/'/g, '').replace(/"/g, '') || "Default") : "Default"}
-                        </span>
-                        <ChevronDown size={10} className={cn("transition-transform duration-200 opacity-50", activeDropdown === 'fontFamily' ? "rotate-180" : "")} />
-                      </button>
-                      <AnimatePresence>
-                        {activeDropdown === 'fontFamily' && (
-                          <motion.div 
-                            initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                            animate={{ opacity: 1, y: 0, scale: 1 }}
-                            exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                            transition={{ duration: 0.1 }}
-                            className={cn(
-                              "absolute top-full mt-2 left-1/2 -translate-x-1/2 rounded-xl shadow-2xl z-50 p-2 backdrop-blur-2xl flex flex-col gap-1 w-max transform-gpu",
-                              darkMode ? "bg-black/80 border border-white/10 text-white" : "bg-white/95 border border-black/10 text-gray-900"
-                            )}
-                          >
-                            {[
-                               { name: "Default Font", value: "" },
-                               { name: "Arial", value: "Arial, sans-serif" },
-                               { name: "Times New Roman", value: "'Times New Roman', serif" },
-                               { name: "Courier New", value: "'Courier New', monospace" },
-                               { name: "Georgia", value: "Georgia, serif" },
-                               { name: "Verdana", value: "Verdana, sans-serif" }
-                            ].map(font => (
-                              <button
-                                key={font.name}
-                                onClick={() => { updateFocusedBlock({ fontFamily: font.value }); setActiveDropdown(null); }}
-                                className={cn("px-3 py-1.5 rounded transition-colors text-xs text-left border border-transparent whitespace-nowrap", focusedPara?.fontFamily === font.value ? (darkMode ? "bg-white/20 text-white" : "bg-black/10 text-black") : "hover:bg-black/5 dark:hover:bg-white/10")}
-                                style={{ fontFamily: font.value }}
-                              >
-                                {font.name}
-                              </button>
-                            ))}
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-                      
-                    {/* Font Size Dropdown */}
-                    <div className="relative">
-                      <button
-                        onClick={() => setActiveDropdown(activeDropdown === 'fontSize' ? null : 'fontSize')}
-                        className={cn(
-                          "flex items-center gap-0.5 p-1 rounded transition-colors",
-                          activeDropdown === 'fontSize' 
-                            ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
-                            : "hover:bg-gray-100 dark:hover:bg-[#333] text-inherit"
-                        )}
-                      >
-                        <div className="flex items-baseline font-serif leading-none tracking-tight opacity-70">
-                          <span className="text-[14px]">A</span>
-                          <span className="text-[10px]">a</span>
-                        </div>
-                        <span className="text-[11px] md:text-xs text-center ml-1 w-[24px]">
-                          {focusedPara?.fontSize ? focusedPara.fontSize.replace('pt', '') : "Def"}
-                        </span>
-                        <ChevronDown size={10} className={cn("transition-transform duration-200 opacity-50", activeDropdown === 'fontSize' ? "rotate-180" : "")} />
-                      </button>
-                      <AnimatePresence>
-                        {activeDropdown === 'fontSize' && (
-                          <motion.div 
-                            initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                            animate={{ opacity: 1, y: 0, scale: 1 }}
-                            exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                            transition={{ duration: 0.1 }}
-                            className={cn(
-                              "absolute top-full mt-2 left-1/2 -translate-x-1/2 rounded-xl shadow-2xl z-50 p-2 backdrop-blur-2xl grid grid-cols-5 gap-1 w-max transform-gpu",
-                              darkMode ? "bg-black/80 border border-white/10 text-white" : "bg-white/95 border border-black/10 text-gray-900"
-                            )}
-                          >
-                            {[ {name: "Def", value: ""}, {name: "8pt", value: "8pt"}, {name: "9pt", value: "9pt"}, {name: "10pt", value: "10pt"}, {name: "11pt", value: "11pt"}, {name: "12pt", value: "12pt"}, {name: "14pt", value: "14pt"}, {name: "18pt", value: "18pt"}, {name: "24pt", value: "24pt"}, {name: "36pt", value: "36pt"} ].map(size => (
-                              <button
-                                key={size.name}
-                                onClick={() => { updateFocusedBlock({ fontSize: size.value }); setActiveDropdown(null); }}
-                                className={cn("w-8 h-8 flex items-center justify-center rounded transition-colors text-xs border border-transparent", focusedPara?.fontSize === size.value ? (darkMode ? "bg-white/20 text-white" : "bg-black/10 text-black") : "hover:bg-black/5 dark:hover:bg-white/10")}
-                              >
-                                {size.name.replace('pt', '')}
-                              </button>
-                            ))}
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
+                    <button 
+                      onClick={() => setActiveDropdown(activeDropdown === 'list' ? null : 'list')}
+                      className={cn(
+                        "flex items-center gap-0.5 p-1 rounded transition-colors",
+                        activeDropdown === 'list'
+                          ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
+                          : "hover:bg-gray-100 dark:hover:bg-[#333] text-inherit"
+                      )}
+                      title="Lists"
+                    >
+                      {(() => {
+                        if (focusedPara?.isNumbering) return <ListOrdered size={15} />;
+                        return <List size={15} />;
+                      })()}
+                      <ChevronDown size={10} className={cn("transition-transform duration-200", activeDropdown === 'list' ? "text-black dark:text-white rotate-180" : "text-gray-400")} />
+                    </button>
 
                     <div className="w-px h-3 bg-gray-300 dark:bg-gray-600 mx-0.5" />
                     <button onClick={() => {
@@ -4174,7 +4469,296 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                       setFocusedBlock({ s: focusedBlock.s, p: focusedBlock.p + 1 });
                     }} className="p-1 hover:bg-blue-100 text-blue-500 rounded transition-colors" title="Add Paragraph Below"><Plus size={15} /></button>
                     <button onClick={deleteFocusedBlock} className="p-1 hover:bg-red-100 text-red-500 rounded transition-colors" title="Delete Paragraph"><Trash size={15} /></button>
+                    <div className="w-px h-3 bg-gray-300 dark:bg-gray-600 mx-0.5" />
+                    
+                    {/* More Formatting Button */}
+                    <button 
+                      onClick={() => setActiveDropdown((activeDropdown === 'more' || activeDropdown === 'fontFamily' || activeDropdown === 'fontSize') ? null : 'more')}
+                      className={cn(
+                        "flex items-center gap-0.5 p-1 rounded transition-colors",
+                        (activeDropdown === 'more' || activeDropdown === 'fontFamily' || activeDropdown === 'fontSize')
+                          ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
+                          : "hover:bg-gray-100 dark:hover:bg-[#333] text-inherit"
+                      )}
+                      title="More Options"
+                    >
+                      <ChevronDown 
+                        size={15} 
+                        className={cn(
+                          "transition-transform duration-200",
+                          (activeDropdown === 'more' || activeDropdown === 'fontFamily' || activeDropdown === 'fontSize') ? "rotate-180" : "rotate-0"
+                        )} 
+                      />
+                    </button>
                     </div>
+
+                    {/* Integrated Expanded Area */}
+                    <AnimatePresence>
+                      {(activeDropdown === 'more' || activeDropdown === 'fontFamily' || activeDropdown === 'fontSize' || activeDropdown === 'align' || activeDropdown === 'color' || activeDropdown === 'list') && (
+                        <motion.div 
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: 'auto', opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={{ duration: 0.2, ease: "easeInOut" }}
+                          className="w-full relative z-50 overflow-hidden flex flex-col items-center"
+                        >
+                          {(activeDropdown === 'more' || activeDropdown === 'fontFamily' || activeDropdown === 'fontSize') && (
+                            <div 
+                              className="w-full flex items-center justify-center border-t pt-1.5 mt-1.5"
+                              style={{ borderColor: darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }}
+                            >
+                              <div className="flex items-center gap-3 md:gap-4 py-1 px-2 w-full justify-center">
+                                {/* Font Family Selection */}
+                                <button
+                                  onClick={() => setActiveDropdown(activeDropdown === 'fontFamily' ? 'more' : 'fontFamily')}
+                                  className={cn(
+                                    "flex items-center gap-1.5 px-2 md:px-3 py-1 rounded transition-colors border-transparent",
+                                    activeDropdown === 'fontFamily' 
+                                      ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
+                                      : "hover:bg-gray-100 dark:hover:bg-[#333] text-inherit"
+                                  )}
+                                >
+                                  <Type size={14} className="opacity-50" />
+                                  <span className="text-[11px] md:text-xs truncate w-[60px] md:w-[70px] text-left">
+                                    {focusedPara?.fontFamily ? focusedPara.fontFamily.split(',')[0].replace(/'/g, '') : "Default"}
+                                  </span>
+                                  <ChevronDown size={12} className={cn("transition-transform", activeDropdown === 'fontFamily' && "rotate-180")} />
+                                </button>
+                                  
+                                {/* Font Size Selection */}
+                                <button
+                                  onClick={() => setActiveDropdown(activeDropdown === 'fontSize' ? 'more' : 'fontSize')}
+                                  className={cn(
+                                    "flex items-center gap-1.5 px-2 md:px-3 py-1 rounded transition-colors border-transparent",
+                                    activeDropdown === 'fontSize' 
+                                      ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
+                                      : "hover:bg-gray-100 dark:hover:bg-[#333] text-inherit"
+                                  )}
+                                >
+                                  <div className="flex items-baseline font-serif leading-none tracking-tight opacity-70">
+                                    <span className="text-[14px]">A</span>
+                                    <span className="text-[10px]">a</span>
+                                  </div>
+                                  <span className="text-[11px] md:text-xs truncate w-[30px] md:w-[40px] text-center">
+                                    {focusedPara?.fontSize || "Def"}
+                                  </span>
+                                  <ChevronDown size={12} className={cn("opacity-50 transition-transform", activeDropdown === 'fontSize' && "rotate-180")} />
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* INLINE Sub-menu Content (The Fix) */}
+                          <AnimatePresence mode="wait">
+                            {/* Alignment Options */}
+                            {activeDropdown === 'align' && (
+                              <motion.div 
+                                key="align-list"
+                                initial={{ height: 0, opacity: 0 }} 
+                                animate={{ height: 'auto', opacity: 1 }} 
+                                exit={{ height: 0, opacity: 0 }}
+                                className="w-full flex flex-wrap justify-center gap-2 p-2 border-t mt-1"
+                                style={{ borderColor: darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }}
+                              >
+                                <button 
+                                  onClick={() => { updateFocusedBlock({ alignment: 'left' }); }} 
+                                  className={cn(
+                                    "p-1.5 rounded transition-colors border border-transparent",
+                                    (focusedPara?.alignment === 'left' || !focusedPara?.alignment)
+                                      ? "bg-blue-500 text-white shadow-sm"
+                                      : "hover:bg-black/5 dark:hover:bg-white/10"
+                                  )} 
+                                  title="Align Left"
+                                >
+                                  <AlignLeft size={16} />
+                                </button>
+                                <button 
+                                  onClick={() => { updateFocusedBlock({ alignment: 'center' }); }} 
+                                  className={cn(
+                                    "p-1.5 rounded transition-colors border border-transparent",
+                                    focusedPara?.alignment === 'center'
+                                      ? "bg-blue-500 text-white shadow-sm"
+                                      : "hover:bg-black/5 dark:hover:bg-white/10"
+                                  )} 
+                                  title="Align Center"
+                                >
+                                  <AlignCenter size={16} />
+                                </button>
+                                <button 
+                                  onClick={() => { updateFocusedBlock({ alignment: 'right' }); }} 
+                                  className={cn(
+                                    "p-1.5 rounded transition-colors border border-transparent",
+                                    focusedPara?.alignment === 'right'
+                                      ? "bg-blue-500 text-white shadow-sm"
+                                      : "hover:bg-black/5 dark:hover:bg-white/10"
+                                  )} 
+                                  title="Align Right"
+                                >
+                                  <AlignRight size={16} />
+                                </button>
+                                <button 
+                                  onClick={() => { updateFocusedBlock({ alignment: 'justify' }); }} 
+                                  className={cn(
+                                    "p-1.5 rounded transition-colors border border-transparent",
+                                    focusedPara?.alignment === 'justify'
+                                      ? "bg-blue-500 text-white shadow-sm"
+                                      : "hover:bg-black/5 dark:hover:bg-white/10"
+                                  )} 
+                                  title="Justify"
+                                >
+                                  <AlignJustify size={16} />
+                                </button>
+                              </motion.div>
+                            )}
+                            
+                            {/* Color Options */}
+                            {activeDropdown === 'color' && (
+                              <motion.div 
+                                key="color-list"
+                                initial={{ height: 0, opacity: 0 }} 
+                                animate={{ height: 'auto', opacity: 1 }} 
+                                exit={{ height: 0, opacity: 0 }}
+                                className="w-full flex flex-wrap justify-center gap-3 p-2 border-t mt-1"
+                                style={{ borderColor: darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }}
+                              >
+                                {[
+                                  { name: "De", value: "" },
+                                  { name: "Black", value: "#000000" },
+                                  { name: "Red", value: "#FF0000" },
+                                  { name: "Blue", value: "#2563EB" },
+                                  { name: "Green", value: "#16A34A" },
+                                  { name: "Gray", value: "#6B7280" },
+                                ].map(color => (
+                                  <button
+                                    key={color.name}
+                                    onClick={() => {
+                                      updateFocusedBlock({ color: color.value || undefined });
+                                    }}
+                                    className={cn(
+                                      "w-6 h-6 rounded-full border dark:border-gray-600 transition-transform hover:scale-110 flex items-center justify-center text-[8px]",
+                                      focusedPara?.color === color.value || (!focusedPara?.color && color.value === "") ? "scale-125 ring-2 ring-blue-500 shadow-sm" : ""
+                                    )}
+                                    style={{ backgroundColor: color.value || 'transparent', borderColor: color.value ? 'transparent' : (darkMode ? '#444' : '#e5e7eb') }}
+                                    title={color.name}
+                                  >
+                                    {color.value === "" && "De"}
+                                  </button>
+                                ))}
+                              </motion.div>
+                            )}
+
+                            {/* List Options */}
+                            {activeDropdown === 'list' && (
+                              <motion.div 
+                                key="list-group"
+                                initial={{ height: 0, opacity: 0 }} 
+                                animate={{ height: 'auto', opacity: 1 }} 
+                                exit={{ height: 0, opacity: 0 }}
+                                className="w-full flex flex-wrap justify-center gap-2 p-2 border-t mt-1"
+                                style={{ borderColor: darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }}
+                              >
+                                <button 
+                                  onClick={() => { updateFocusedBlock({ isBullet: 'toggle' }); }} 
+                                  className={cn(
+                                    "p-1.5 rounded transition-colors border border-transparent",
+                                    focusedPara?.isBullet
+                                      ? "bg-blue-500 text-white shadow-sm"
+                                      : "hover:bg-black/5 dark:hover:bg-white/10"
+                                  )} 
+                                  title="Bullet List"
+                                >
+                                  <List size={16} />
+                                </button>
+                                <button 
+                                  onClick={() => { updateFocusedBlock({ isNumbering: 'toggle' }); }} 
+                                  className={cn(
+                                    "p-1.5 rounded transition-colors border border-transparent",
+                                    focusedPara?.isNumbering
+                                      ? "bg-blue-500 text-white shadow-sm"
+                                      : "hover:bg-black/5 dark:hover:bg-white/10"
+                                  )} 
+                                  title="Numbered List"
+                                >
+                                  <ListOrdered size={16} />
+                                </button>
+                              </motion.div>
+                            )}
+
+                            {activeDropdown === 'fontFamily' && (
+                              <motion.div 
+                                key="font-list"
+                                initial={{ height: 0, opacity: 0 }} 
+                                animate={{ height: 'auto', opacity: 1 }} 
+                                exit={{ height: 0, opacity: 0 }}
+                                className="w-full flex flex-wrap justify-center gap-1 p-2 border-t mt-1"
+                                style={{ borderColor: darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }}
+                              >
+                                {[
+                                  { name: "Default Font", value: "" },
+                                  { name: "Arial", value: "Arial, sans-serif" },
+                                  { name: "Times New Roman", value: "'Times New Roman', serif" },
+                                  { name: "Courier New", value: "'Courier New', monospace" },
+                                  { name: "Georgia", value: "Georgia, serif" },
+                                  { name: "Verdana", value: "Verdana, sans-serif" }
+                                ].map(font => (
+                                  <button
+                                    key={font.name}
+                                    onClick={() => { updateFocusedBlock({ fontFamily: font.value }); }}
+                                    className={cn(
+                                      "px-2 py-1 rounded transition-colors text-[10px] md:text-xs border border-transparent whitespace-nowrap",
+                                      focusedPara?.fontFamily === font.value 
+                                        ? "bg-blue-500 text-white shadow-sm" 
+                                        : "hover:bg-black/5 dark:hover:bg-white/10"
+                                    )}
+                                    style={{ fontFamily: font.value }}
+                                  >
+                                    {font.name}
+                                  </button>
+                                ))}
+                              </motion.div>
+                            )}
+
+                            {activeDropdown === 'fontSize' && (
+                              <motion.div 
+                                key="size-list"
+                                initial={{ height: 0, opacity: 0 }} 
+                                animate={{ height: 'auto', opacity: 1 }} 
+                                exit={{ height: 0, opacity: 0 }}
+                                className="w-full flex flex-wrap justify-center gap-1 p-2 border-t mt-1"
+                                style={{ borderColor: darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }}
+                              >
+                                {[
+                                  { name: "Def", value: "" },
+                                  { name: "8pt", value: "8pt" },
+                                  { name: "9pt", value: "9pt" },
+                                  { name: "10pt", value: "10pt" },
+                                  { name: "11pt", value: "11pt" },
+                                  { name: "12pt", value: "12pt" },
+                                  { name: "14pt", value: "14pt" },
+                                  { name: "18pt", value: "18pt" },
+                                  { name: "24pt", value: "24pt" },
+                                  { name: "36pt", value: "36pt" }
+                                ].map(size => (
+                                  <button
+                                    key={size.name}
+                                    onClick={() => { updateFocusedBlock({ fontSize: size.value }); }}
+                                    className={cn(
+                                      "w-8 h-8 flex items-center justify-center rounded transition-colors text-[10px] md:text-xs border border-transparent",
+                                      focusedPara?.fontSize === size.value 
+                                        ? "bg-blue-500 text-white shadow-sm" 
+                                        : "hover:bg-black/5 dark:hover:bg-white/10"
+                                    )}
+                                  >
+                                    {size.name.replace('pt', '')}
+                                  </button>
+                                ))}
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+
                   </>
                 );
               })()}
@@ -4315,6 +4899,248 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                 >
                   Confirm
                 </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Custom Template Modal */}
+      <AnimatePresence>
+        {newTemplateModal && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 transform-gpu will-change-[backdrop-filter]"
+          >
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className={cn(
+                "w-full max-w-lg p-6 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.3)] relative overflow-hidden",
+                darkMode ? "text-white" : "text-gray-900"
+              )}
+            >
+              <div className={cn(
+                "absolute inset-0 border -z-10 backdrop-blur-3xl pointer-events-none transform-gpu will-change-[backdrop-filter]",
+                darkMode ? "bg-black/80 border-white/10" : "bg-white/90 border-black/10"
+              )} />
+              <h3 className="text-xl font-bold mb-4">
+                {editingTemplateId ? (lang === 'zh' ? '修改模板' : 'Edit Template') : (lang === 'zh' ? '添加自定义模板' : 'Add Custom Template')}
+              </h3>
+              
+              <div className="space-y-4 mb-6">
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider opacity-70 mb-1">{lang === 'zh' ? '模板名称' : 'Name'}</label>
+                  <div className="relative group">
+                    <input 
+                      type="text" 
+                      value={newTemplateData.name}
+                      onChange={e => setNewTemplateData({...newTemplateData, name: e.target.value})}
+                      placeholder={lang === 'zh' ? '例如：月报模板' : 'e.g. Monthly Report'}
+                      className={cn(
+                        "w-full px-4 py-2.5 pr-12 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all border",
+                        darkMode ? "bg-white/5 border-white/10" : "bg-black/5 border-transparent"
+                      )}
+                    />
+                    <button
+                      onClick={handleGenerateNameOnly}
+                      disabled={isGeneratingTemplate || (!newTemplateData.prompt.trim() && !newTemplateData.attachments?.length)}
+                      title={lang === 'zh' ? '根据提示词自动补全名称' : 'Auto-generate name from prompt'}
+                      className={cn(
+                        "absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg transition-all",
+                        darkMode ? "hover:bg-white/10 text-blue-400" : "hover:bg-black/5 text-blue-600",
+                        "disabled:opacity-30 disabled:cursor-not-allowed"
+                      )}
+                    >
+                      {isGeneratingTemplate ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold uppercase tracking-wider opacity-70">
+                      {lang === 'zh' ? '提示词指令' : 'Prompt Instructions'}
+                    </label>
+                    <label className="cursor-pointer text-xs font-medium text-blue-500 hover:text-blue-600 transition-colors flex items-center gap-1.5 opacity-80 hover:opacity-100">
+                      <Upload size={14} />
+                      {lang === 'zh' ? '上传格式参考 (Word/PDF/图片)' : 'Upload Format Example'}
+                      <input 
+                        type="file" 
+                        className="hidden" 
+                        accept=".docx,.txt,.md,image/*,.pdf" 
+                        onChange={async (e) => {
+                          setNewTemplateData(prev => ({ ...prev, error: undefined }));
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          
+                          if (file.size > 15 * 1024 * 1024 && !file.name.toLowerCase().endsWith('.docx') && !file.type.includes('wordprocessingml')) {
+                            setNewTemplateData(prev => ({ ...prev, error: lang === 'zh' ? '文件过大，请保持在 15MB 以内。' : 'File is too large. Please keep it under 15MB.' }));
+                            return;
+                          }
+
+                          try {
+                            if (file.type.startsWith('image/') || file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
+                              // Read as attachment for images and PDFs
+                              const reader = new FileReader();
+                              reader.onload = () => {
+                                const base64 = (reader.result as string).split(',')[1];
+                                const newAttachment = {
+                                  name: file.name,
+                                  type: file.type || (file.name.endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream'),
+                                  data: base64
+                                };
+                                setNewTemplateData(prev => ({
+                                  ...prev,
+                                  attachments: [...(prev.attachments || []), newAttachment],
+                                  prompt: prev.prompt.trim() ? prev.prompt : (lang === 'zh' ? '仿照此文档格式进行编写' : 'Please follow this document format')
+                                }));
+                                
+                                // Auto-trigger name generation after upload if current name is empty or default
+                                setTimeout(() => {
+                                  handleGenerateNameOnly();
+                                }, 500);
+                              };
+                              reader.readAsDataURL(file);
+                            } else {
+                              // Extract text for Docs/TXT/MD and add as attachment
+                              let text = '';
+                              if (file.name.toLowerCase().endsWith('.docx') || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+                                const parsed = await parseWordDoc(file);
+                                text = parsed.sections.map((s: any) => s.paragraphs.map((p: any) => {
+                                  if (p.type === 'table') return '[Table]';
+                                  if (p.type === 'image') return '[Image]';
+                                  if (p.type === 'formula') return '[Formula]';
+                                  return p.runs?.map((r: any) => r.text).join('') || p.text || '';
+                                }).join('\n')).join('\n\n');
+                              } else {
+                                text = await file.text();
+                              }
+                              
+                              if (text && text.trim()) {
+                                const newAttachment = {
+                                  name: file.name,
+                                  type: file.type || 'text/plain',
+                                  extractedText: text.trim()
+                                };
+                                setNewTemplateData(prev => ({
+                                  ...prev,
+                                  attachments: [...(prev.attachments || []), newAttachment],
+                                  prompt: prev.prompt.trim() ? prev.prompt : (lang === 'zh' ? '仿照此文档格式进行编写' : 'Please follow this document format')
+                                }));
+
+                                // Auto-trigger name generation after upload
+                                setTimeout(() => {
+                                  handleGenerateNameOnly();
+                                }, 500);
+                              } else {
+                                setNewTemplateData(prev => ({
+                                  ...prev,
+                                  error: lang === 'zh' ? '该文档似乎没有可提取的内容。' : 'The document seems to have no extractable content.'
+                                }));
+                              }
+                            }
+                          } catch (err) {
+                            console.error(err);
+                            setNewTemplateData(prev => ({ 
+                              ...prev, 
+                              error: lang === 'zh' ? '读取文件失败: ' + (err as Error).message : 'Failed to read file: ' + (err as Error).message 
+                            }));
+                          }
+                          e.target.value = '';
+                        }}
+                      />
+                    </label>
+                  </div>
+                  {newTemplateData.error && (
+                    <div className="text-red-500 text-xs mb-2 bg-red-500/10 p-2 rounded flex items-center gap-1.5">
+                      <AlertCircle size={14} />
+                      {newTemplateData.error}
+                    </div>
+                  )}
+                  {newTemplateData.attachments && newTemplateData.attachments.length > 0 && (
+                    <div className="flex flex-wrap gap-2 mb-3">
+                      {newTemplateData.attachments.map((att, idx) => (
+                        <div key={idx} className={cn("relative group flex items-center pr-8 overflow-hidden rounded-lg border", darkMode ? "bg-white/5 border-white/10" : "bg-black/5 border-gray-200")}>
+                          {att.type.startsWith('image/') ? (
+                            <img src={`data:${att.type};base64,${att.data}`} alt={att.name} className="w-10 h-10 object-cover border-r border-gray-500/20" />
+                          ) : (
+                            <div className={cn("w-10 h-10 flex items-center justify-center border-r border-gray-500/20", darkMode ? "bg-blue-500/10 text-blue-400" : "bg-blue-50 text-blue-500")}>
+                              <FileText size={18} />
+                            </div>
+                          )}
+                          <span className="text-sm font-medium truncate px-3 max-w-[150px]">{att.name}</span>
+                          <button
+                            onClick={() => setNewTemplateData(prev => ({ ...prev, attachments: prev.attachments?.filter((_, i) => i !== idx) }))}
+                            className="absolute right-1 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500 p-1.5 rounded-md hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <textarea 
+                    value={newTemplateData.prompt}
+                    onChange={e => setNewTemplateData({...newTemplateData, prompt: e.target.value})}
+                    placeholder={lang === 'zh' ? '告诉 AI 如何格式化您的文档...' : 'Tell AI how to format your document...'}
+                    className={cn(
+                      "w-full px-3 py-2 rounded-xl text-sm border h-48 resize-none custom-scrollbar focus:outline-none focus:ring-2 focus:ring-blue-500",
+                      darkMode ? "bg-white/5 border-white/10" : "bg-black/5 border-transparent"
+                    )}
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-between items-center mt-6">
+                <button
+                  onClick={handleAutoFillTemplate}
+                  disabled={isGeneratingTemplate || (!newTemplateData.attachments?.length && !newTemplateData.name && !newTemplateData.prompt)}
+                  className={cn(
+                    "px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all shadow-sm active:scale-95 disabled:opacity-50 disabled:active:scale-100",
+                    darkMode ? "bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 border border-purple-500/30" : "bg-purple-100 text-purple-700 hover:bg-purple-200 border border-purple-200"
+                  )}
+                >
+                  {isGeneratingTemplate ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+                  {lang === 'zh' ? (isGeneratingTemplate ? '正在生成...' : 'AI 智能填充') : (isGeneratingTemplate ? 'Generating...' : 'Auto-fill')}
+                </button>
+                
+                <div className="flex justify-end gap-3">
+                  <button
+                    onClick={() => {
+                      setNewTemplateModal(false);
+                      setEditingTemplateId(null);
+                      setNewTemplateData({ name: '', prompt: '', attachments: [] });
+                    }}
+                    className={cn(
+                      "px-4 py-2 rounded-xl text-sm font-medium transition-all active:scale-95",
+                      darkMode ? "hover:bg-white/10 text-gray-300" : "hover:bg-black/5 text-gray-600"
+                    )}
+                  >
+                    {t.cancel}
+                  </button>
+                  <button
+                    onClick={() => {
+                      const finalName = newTemplateData.name.trim() || (lang === 'zh' ? '未命名模板' : 'Untitled Template');
+                      const finalData = { ...newTemplateData, name: finalName };
+                      
+                      if (editingTemplateId) {
+                        setCustomTemplates(prev => prev.map(m => m.id === editingTemplateId ? { ...m, ...finalData } : m));
+                      } else {
+                        setCustomTemplates([...customTemplates, { id: Date.now().toString(), ...finalData }]);
+                      }
+                      setNewTemplateModal(false);
+                      setEditingTemplateId(null);
+                      setNewTemplateData({ name: '', prompt: '', attachments: [] });
+                    }}
+                    disabled={!newTemplateData.name.trim() && !newTemplateData.prompt.trim() && !(newTemplateData.attachments && newTemplateData.attachments.length > 0)}
+                    className="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-sm font-bold transition-all shadow-lg active:scale-95 disabled:active:scale-100"
+                  >
+                    {lang === 'zh' ? '保存模板' : 'Save Template'}
+                  </button>
+                </div>
               </div>
             </motion.div>
           </motion.div>
