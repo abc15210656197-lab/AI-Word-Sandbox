@@ -87,7 +87,9 @@ import {
   query,
   where,
   orderBy,
-  deleteDoc
+  deleteDoc,
+  limit,
+  onSnapshot
 } from "./firebase";
 import ImageKit from "imagekit-javascript";
 
@@ -455,7 +457,7 @@ function ModelSelector({
       <button 
         onClick={() => setIsOpen(!isOpen)}
         className={cn(
-          "flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-all border shadow-sm backdrop-blur-2xl transform-gpu will-change-[backdrop-filter]",
+          "flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-all border shadow-sm backdrop-blur-2xl transform-gpu",
           isOpen 
             ? (darkMode ? "bg-white/20 text-white border-white/30 shadow-lg" : "bg-white/80 text-black border-white shadow-lg")
             : (darkMode 
@@ -490,7 +492,7 @@ function ModelSelector({
               exit={{ opacity: 0, y: 10, scale: 0.95 }}
               transition={{ duration: 0.1, ease: "easeOut" }}
               className={cn(
-                "absolute bottom-full mb-5 left-0 w-80 rounded-xl shadow-2xl z-50 p-1 backdrop-blur-2xl transform-gpu will-change-[backdrop-filter]",
+                "absolute bottom-full mb-5 left-0 w-80 rounded-xl shadow-2xl z-50 p-1 backdrop-blur-2xl transform-gpu",
                 darkMode 
                   ? "bg-black/80 border border-white/10 text-white" 
                   : "bg-white/95 border border-black/10 text-gray-900"
@@ -558,7 +560,7 @@ function ModelSelector({
                         key={m.id}
                         onClick={() => { onChange(m.id); setIsOpen(false); }}
                         className={cn(
-                          "w-full flex items-start gap-3 px-3 py-3 rounded-xl text-left transition-all relative group backdrop-blur-xl transform-gpu will-change-[backdrop-filter]",
+                          "w-full flex items-start gap-3 px-3 py-3 rounded-xl text-left transition-all relative group backdrop-blur-xl transform-gpu",
                           selected === m.id 
                             ? (darkMode ? "bg-blue-600/40 border border-blue-400/30 shadow-lg shadow-blue-500/20" : "bg-blue-600/20 border border-blue-500/40 shadow-sm shadow-blue-500/10") 
                             : (darkMode ? "hover:bg-white/10" : "hover:bg-black/5")
@@ -598,7 +600,7 @@ function ModelSelector({
                       <div 
                         key={m.id}
                         className={cn(
-                          "w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left transition-all relative group backdrop-blur-xl transform-gpu will-change-[backdrop-filter]",
+                          "w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left transition-all relative group backdrop-blur-xl transform-gpu",
                           selectedTemplateId === m.id 
                             ? (darkMode ? "bg-blue-600/40 border border-blue-400/30 shadow-lg shadow-blue-500/20" : "bg-blue-600/20 border border-blue-500/40 shadow-sm shadow-blue-500/10") 
                             : (darkMode ? "hover:bg-white/10" : "hover:bg-black/5")
@@ -799,30 +801,32 @@ const ChatInputArea = React.memo(({
       )}
     >
       {/* Seamless Progressive Gradient Blur Background */}
-      {!isInputExpanded ? (
-        <div className="absolute -top-6 inset-x-0 bottom-0 -z-10 pointer-events-none">
-          {/* Single Blur Layer to prevent GPU flashing */}
-          <div className="absolute inset-0 backdrop-blur-md" style={{ maskImage: 'linear-gradient(to bottom, transparent 0px, black 40px, black 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 0px, black 40px, black 100%)' }} />
-          
-          {/* Background Color Gradient */}
-          <div 
-            className={cn(
-              "absolute inset-0 transition-colors duration-500",
-              darkMode ? "bg-black/30" : "bg-white/50",
-              isAgentMode && (darkMode ? "bg-black/20" : "bg-white/40")
-            )}
-            style={{
-              maskImage: 'linear-gradient(to bottom, transparent 0px, black 40px, black 100%)',
-              WebkitMaskImage: 'linear-gradient(to bottom, transparent 0px, black 40px, black 100%)',
-            }}
-          />
-        </div>
-      ) : (
-        <div className={cn(
-          "absolute inset-0 -z-10 backdrop-blur-xl pointer-events-none transition-colors duration-500",
-          darkMode ? "bg-black/60" : "bg-white/60"
-        )} />
-      )}
+      <div className={cn(
+        "absolute -top-6 inset-x-0 bottom-0 -z-10 pointer-events-none transition-opacity duration-300",
+        !isInputExpanded ? "opacity-100" : "opacity-0"
+      )}>
+        {/* Single Blur Layer to prevent GPU flashing */}
+        <div className="absolute inset-0 backdrop-blur-md" style={{ maskImage: 'linear-gradient(to bottom, transparent 0px, black 40px, black 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 0px, black 40px, black 100%)' }} />
+        
+        {/* Background Color Gradient */}
+        <div 
+          className={cn(
+            "absolute inset-0 transition-colors duration-500",
+            darkMode ? "bg-black/30" : "bg-white/50",
+            isAgentMode && (darkMode ? "bg-black/20" : "bg-white/40")
+          )}
+          style={{
+            maskImage: 'linear-gradient(to bottom, transparent 0px, black 40px, black 100%)',
+            WebkitMaskImage: 'linear-gradient(to bottom, transparent 0px, black 40px, black 100%)',
+          }}
+        />
+      </div>
+
+      <div className={cn(
+        "absolute inset-0 -z-10 backdrop-blur-xl pointer-events-none transition-all duration-500",
+        isInputExpanded ? "opacity-100" : "opacity-0",
+        darkMode ? "bg-black/60" : "bg-white/60"
+      )} />
 
       {/* Drag overlay */}
       <AnimatePresence>
@@ -952,13 +956,12 @@ const ChatInputArea = React.memo(({
             <button
               onClick={() => fileInputRef.current?.click()}
               className={cn(
-                "p-1.5 md:p-2 rounded-lg transition-colors flex items-center gap-1.5 text-xs font-medium border border-transparent",
-                darkMode ? "hover:bg-[#444] text-gray-400 hover:border-white/10" : "hover:bg-gray-200 text-gray-500 hover:border-black/5"
+                "p-2 rounded-lg transition-colors flex items-center justify-center text-gray-400 hover:text-blue-500",
+                darkMode ? "hover:bg-white/5" : "hover:bg-black/5"
               )}
-              title={lang === 'zh' ? '上传参考资料 (支持图片, PDF, Word段落)' : 'Upload reference (Img, PDF, Word)'}
+              title={lang === 'zh' ? '上传参考资料' : 'Upload reference'}
             >
-              <Upload size={16} />
-              <span className="hidden sm:inline">{lang === 'zh' ? '参考资料' : 'Reference'}</span>
+              <Plus size={20} />
             </button>
             <ModelSelector 
               selected={selectedModel} 
@@ -1073,10 +1076,13 @@ export default function App() {
   }, [customTemplates]);
 
   const handleDeleteTemplate = (id: string) => {
-    if (window.confirm(lang === 'zh' ? '确定要删除这个模板吗？' : 'Delete this template?')) {
-      setCustomTemplates(prev => prev.filter(t => t.id !== id));
-      if (selectedTemplateId === id) setSelectedTemplateId(null);
-    }
+    setConfirmAction({
+      message: lang === 'zh' ? '确定要删除这个模板吗？' : 'Delete this template?',
+      action: () => {
+        setCustomTemplates(prev => prev.filter(t => t.id !== id));
+        if (selectedTemplateId === id) setSelectedTemplateId(null);
+      }
+    });
   };
 
   const handleEditTemplate = (template: any) => {
@@ -1316,9 +1322,9 @@ export default function App() {
   // Responsive Detection
   useEffect(() => {
     const checkMobile = () => {
-      setIsMobile(window.innerWidth < 768);
+      setIsMobile(window.innerWidth < 1024);
       setIsLandscape(window.innerWidth > window.innerHeight);
-      if (window.innerWidth >= 768) {
+      if (window.innerWidth >= 1024) {
         setSidebarOpen(true);
       }
     };
@@ -1365,53 +1371,90 @@ export default function App() {
 
   // Auth Listener
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       setIsAuthReady(true);
       
-      if (currentUser) {
-        // Record login history
-        try {
-          const historyRef = collection(db, "users", currentUser.uid, "loginHistory");
-          await addDoc(historyRef, {
-            uid: currentUser.uid,
-            timestamp: new Date().toISOString(),
-            userAgent: navigator.userAgent,
-            ip: "client-side-unknown"
-          });
-
-          // Sync user profile
-          const userRef = doc(db, "users", currentUser.uid);
-          await setDoc(userRef, {
-            uid: currentUser.uid,
-            email: currentUser.email,
-            displayName: currentUser.displayName,
-            photoURL: currentUser.photoURL,
-            lastLogin: new Date().toISOString(),
-            theme: darkMode ? "dark" : "light"
-          }, { merge: true });
-
-          fetchSavedDocs(currentUser.uid);
-        } catch (error) {
-          handleFirestoreError(error, OperationType.WRITE, `users/${currentUser.uid}`);
-        }
-      } else {
+      if (!currentUser) {
         setSavedDocs([]);
       }
     });
     return () => unsubscribe();
-  }, [darkMode]);
+  }, []);
 
-  const fetchSavedDocs = async (uid: string) => {
-    try {
-      const q = query(collection(db, "users", uid, "documents"), orderBy("updatedAt", "desc"));
-      const querySnapshot = await getDocs(q);
-      const docs = querySnapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-      setSavedDocs(docs);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.LIST, `users/${uid}/documents`);
+  // Use Profile & Theme Sync
+  useEffect(() => {
+    if (!user) return;
+
+    const syncProfile = async () => {
+      try {
+        const userRef = doc(db, "users", user.uid);
+        await setDoc(userRef, {
+          uid: user.uid,
+          email: user.email,
+          displayName: user.displayName,
+          photoURL: user.photoURL,
+          lastLogin: new Date().toISOString(),
+          theme: darkMode ? "dark" : "light"
+        }, { merge: true });
+      } catch (error) {
+        console.error("Profile sync error", error);
+      }
+    };
+
+    syncProfile();
+  }, [user, darkMode]);
+
+  // Login History - Record once per session
+  useEffect(() => {
+    if (!user) return;
+
+    const recordLogin = async () => {
+      try {
+        const historyRef = collection(db, "users", user.uid, "loginHistory");
+        await addDoc(historyRef, {
+          uid: user.uid,
+          timestamp: new Date().toISOString(),
+          userAgent: navigator.userAgent,
+          ip: "client-side-unknown"
+        });
+      } catch (error) {
+        console.error("History record error", error);
+      }
+    };
+
+    recordLogin();
+  }, [user]);
+
+  // Real-time Documents Listener
+  useEffect(() => {
+    if (!user) {
+      setSavedDocs([]);
+      return;
     }
-  };
+
+    // Limit to 50 documents to save quota and improve performance
+    const q = query(
+      collection(db, "users", user.uid, "documents"), 
+      orderBy("updatedAt", "desc"),
+      limit(50)
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const docs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      setSavedDocs(docs);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, `users/${user.uid}/documents`);
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
+  // We no longer need fetchSavedDocs as a manual refresh function since we use onSnapshot
+  const fetchSavedDocs = useCallback(async (uid: string) => {
+    // Keep as a no-op or simple log to avoid breaking existing calls
+    console.log("Documents are kept in sync via onSnapshot");
+  }, []);
 
   const saveCurrentDoc = async (state: DocumentState, msgs?: ChatMessage[], docId?: string | null) => {
     const currentUser = userRef.current;
@@ -1443,7 +1486,6 @@ export default function App() {
         const docRef = await addDoc(collection(db, "users", currentUser.uid, "documents"), docData);
         setCurrentDocId(docRef.id);
       }
-      fetchSavedDocs(currentUser.uid);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `users/${currentUser.uid}/documents`);
     }
@@ -1513,18 +1555,22 @@ export default function App() {
   };
 
   const deleteSavedDoc = async (id: string) => {
-    if (!user || !window.confirm("Delete this document?")) return;
-    try {
-      await deleteDoc(doc(db, "users", user.uid, "documents", id));
-      if (currentDocId === id) {
-        setCurrentDocId(null);
-        setDocState(INITIAL_DOC_STATE);
-        setHistory({ index: 0, stack: [INITIAL_DOC_STATE] });
+    if (!user) return;
+    setConfirmAction({
+      message: t.confirmDelete(savedDocs.find(d => d.id === id)?.title || 'this document'),
+      action: async () => {
+        try {
+          await deleteDoc(doc(db, "users", user.uid, "documents", id));
+          if (currentDocId === id) {
+            setCurrentDocId(null);
+            setDocState(INITIAL_DOC_STATE);
+            setHistory({ index: 0, stack: [INITIAL_DOC_STATE] });
+          }
+        } catch (error) {
+          handleFirestoreError(error, OperationType.DELETE, `users/${user.uid}/documents/${id}`);
+        }
       }
-      fetchSavedDocs(user.uid);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `users/${user.uid}/documents/${id}`);
-    }
+    });
   };
 
   useEffect(() => {
@@ -3141,9 +3187,9 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
       animate={{ opacity: 1 }}
       transition={{ duration: 0.3 }}
       className={cn(
-        "max-w-[816px] mx-auto shadow-2xl min-h-[1056px] relative transition-colors duration-500 origin-top border",
+        "max-w-[816px] mx-auto shadow-2xl min-h-[1056px] relative transition-colors duration-500 origin-top border rounded-xl",
         "bg-white text-gray-900",
-        isMobile ? "p-4 mx-4 mb-4 rounded-xl" : "p-8 md:p-[96px]",
+        isMobile ? "p-4 mx-4 mb-4" : "p-8 md:p-[96px] mx-4 lg:mx-8 mt-4 mb-16",
         isFormatPainterActive && "cursor-copy"
       )}
     >
@@ -3518,29 +3564,22 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
           animate={{ opacity: 1 }}
           transition={{ duration: 1 }}
           className={cn(
-            "flex flex-col h-screen overflow-hidden relative",
+            "flex flex-col h-screen overflow-hidden relative transition-colors duration-500",
             darkMode ? "text-[#E0E0E0] dark" : "text-[#202124]"
           )}
         >
           {/* Global Agent Mode Background & Light Effect */}
-          <AnimatePresence>
-            {isAgentMode && (
-              <motion.div 
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.4, ease: "easeInOut" }}
-                className={cn(
-                  "absolute inset-0 pointer-events-none z-0 overflow-hidden",
-                  darkMode ? "agent-mode-bg-dark" : "agent-mode-bg-light"
-                )}
-              >
-                <div className="absolute top-[-15%] left-[-15%] w-[60%] h-[60%] bg-pink-400/15 blur-[140px] rounded-full" />
-                <div className="absolute bottom-[-15%] right-[-15%] w-[60%] h-[60%] bg-cyan-400/15 blur-[140px] rounded-full" />
-                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[70%] h-[70%] bg-purple-500/5 blur-[180px] rounded-full" />
-              </motion.div>
+          <div 
+            className={cn(
+              "absolute inset-0 pointer-events-none z-0 overflow-hidden transition-opacity duration-700",
+              isAgentMode ? "opacity-100" : "opacity-0",
+              darkMode ? "agent-mode-bg-dark" : "agent-mode-bg-light"
             )}
-          </AnimatePresence>
+          >
+            <div className="absolute top-[-15%] left-[-15%] w-[60%] h-[60%] bg-pink-400/15 blur-[140px] rounded-full" />
+            <div className="absolute bottom-[-15%] right-[-15%] w-[60%] h-[60%] bg-cyan-400/15 blur-[140px] rounded-full" />
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[70%] h-[70%] bg-purple-500/5 blur-[180px] rounded-full" />
+          </div>
       {/* Background Layers for Smooth Transition */}
       <div className={cn(
         "absolute inset-0 z-[-2] transition-opacity duration-700 bg-gradient-to-br from-[#0f172a] via-[#1e1b4b] to-[#0f172a] pointer-events-none",
@@ -3580,18 +3619,18 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
       <header className="absolute top-0 left-0 right-0 z-[100] flex flex-col pointer-events-none">
         {/* Top Bar - Transparent Background */}
         <div className={cn(
-          "flex items-center justify-between px-4 py-2 transition-colors duration-500 pointer-events-auto relative z-40",
+          "flex items-center justify-between px-4 py-2 transition-colors duration-500 pointer-events-none relative z-40",
           darkMode ? "bg-transparent" : "bg-transparent",
           isAgentMode && "shadow-none"
         )}>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 pointer-events-auto">
             <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
               <Wand2 size={18} />
             </div>
             <h1 className="font-bold text-lg tracking-tight">AI Word Sandbox</h1>
           </div>
           
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 pointer-events-auto">
             <button 
               onClick={() => setLang(lang === 'en' ? 'zh' : 'en')}
               className={cn(
@@ -3658,7 +3697,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                           animate={{ opacity: 1, y: 0, scale: 1 }}
                           exit={{ opacity: 0, y: 10, scale: 0.95 }}
                           className={cn(
-                            "absolute right-0 mt-2 w-48 rounded-xl shadow-[0_10px_40px_rgba(0,0,0,0.2)] z-[100] overflow-hidden backdrop-blur-2xl transform-gpu will-change-[backdrop-filter]",
+                            "absolute right-0 mt-2 w-48 rounded-xl shadow-[0_10px_40px_rgba(0,0,0,0.2)] z-[100] overflow-hidden backdrop-blur-2xl transform-gpu",
                             darkMode ? "bg-black/80 text-white" : "bg-white/80 text-gray-900"
                           )}
                         >
@@ -3696,17 +3735,17 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
         </div>
 
         {/* Blur Area (Session Tabs + Tab Switcher) */}
-        <div className="relative pointer-events-auto z-10">
+        <div className="relative pointer-events-none z-10">
         {/* Session Tabs - Global (Moved above mobile switcher) */}
         <div className={cn(
-          "flex items-center gap-1 px-4 py-2 overflow-x-auto no-scrollbar shrink-0 z-30 transition-all duration-500",
+          "flex items-center gap-1 px-4 py-2 overflow-x-auto no-scrollbar shrink-0 z-30 transition-all duration-500 pointer-events-none",
           darkMode ? "text-white" : "text-gray-900"
         )}>
           {sessions.map(s => (
                 <div 
                   key={s.id}
                   className={cn(
-                    "group flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer border shrink-0",
+                    "group flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer border shrink-0 pointer-events-auto",
                     activeSessionId === s.id 
                       ? (darkMode ? "bg-blue-600 text-white border-blue-500 shadow-md" : "bg-blue-600 text-white border-blue-500 shadow-md")
                       : (darkMode ? "bg-white/5 border-white/10 text-gray-400 hover:bg-white/10" : "bg-black/5 border-black/5 text-gray-600 hover:bg-black/10 backdrop-blur-md")
@@ -3763,7 +3802,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
           <button 
             onClick={createNewSession}
             className={cn(
-              "p-2 rounded-lg transition-colors shrink-0 ml-2",
+              "p-2 rounded-lg transition-colors shrink-0 ml-2 pointer-events-auto",
               darkMode ? "hover:bg-white/10 text-gray-400" : "hover:bg-gray-100 text-gray-500"
             )}
             title={t.newDocument}
@@ -3773,13 +3812,13 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
         </div>
 
         {/* Tab Switcher with Progressive Gradient Blur */}
-        <div className="relative md:hidden">
+        <div className="relative lg:hidden">
           <div className={cn(
-            "flex justify-center p-2 transition-all duration-500 relative z-20",
+            "flex justify-center p-2 transition-all duration-500 relative z-20 pointer-events-none",
             darkMode ? "bg-transparent" : "bg-transparent"
           )}>
             <div className={cn(
-              "flex p-1 rounded-full border transition-all duration-300 backdrop-blur-md",
+              "flex p-1 rounded-full border transition-all duration-300 backdrop-blur-md pointer-events-auto",
               darkMode ? "bg-black/20 border-white/10 shadow-sm" : "bg-white/20 border-black/5 shadow-sm"
             )}>
             <button 
@@ -3812,9 +3851,6 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
         </div>
       </header>
 
-      {/* Global Top Blur to prevent flickering when tabs switch */}
-      <TopBlur darkMode={darkMode} isAgentMode={isAgentMode} />
-
       {/* Session Tabs - Global */}
       <div className="hidden">
         {/* Removed from here, moved into header */}
@@ -3824,41 +3860,51 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
         "flex flex-1 overflow-hidden relative transition-all duration-500", 
         isInputExpanded ? "fixed inset-0 z-[100]" : "z-10"
       )}>
+        {/* Global Top Blur to prevent flickering when tabs switch */}
+        <div className="absolute top-0 left-0 right-0 z-[60] pointer-events-none">
+          <TopBlur darkMode={darkMode} isAgentMode={isAgentMode} />
+        </div>
+        
         {/* Sidebar - Chat Interface */}
         <motion.div 
           initial={false}
-          animate={isInputExpanded ? {
+           animate={isInputExpanded ? {
             x: 0,
-            width: "100vw",
+            width: "100%",
             opacity: 1
           } : (isMobile ? {
-            x: activeTab === "chat" ? 0 : "-100vw",
-            opacity: activeTab === "chat" ? 1 : 0,
-            width: "100vw"
+            x: activeTab === "chat" ? 0 : "-100%",
+            opacity: 1,
+            width: "100%"
           } : { 
             width: sidebarOpen ? "450px" : "0px",
             opacity: 1,
             x: 0
           })}
-          transition={{ type: "spring", bounce: 0, duration: 0.4 }}
+          transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
           className={cn(
-            "flex flex-col border-r relative z-10 transition-colors duration-500 overflow-hidden shrink-0 transform-gpu",
+            "flex flex-col border-r relative transition-colors overflow-hidden shrink-0 transform-gpu",
             darkMode ? "border-white/5 bg-transparent" : "border-black/5 bg-transparent shadow-[4px_0_24px_rgba(0,0,0,0.02)]",
             (!sidebarOpen && !isMobile) && "border-none",
-            (isMobile || isInputExpanded) && "absolute top-0 left-0 w-full h-full z-50 bg-transparent",
+            isMobile && "border-none",
+            (isMobile || isInputExpanded) && "absolute top-0 left-0 w-full h-full bg-transparent",
+            isInputExpanded ? "z-[100]" : (isMobile ? "z-30" : "z-10"),
             (isMobile && activeTab !== "chat" && !isInputExpanded) && "pointer-events-none"
           )}
         >
           {/* Sidebar Background to avoid nested backdrop-filter bug */}
-          <div className="absolute inset-0 -z-10 backdrop-blur-2xl transform-gpu will-change-[backdrop-filter] pointer-events-none" />
-          
+          <div className={cn(
+            "absolute inset-0 -z-10 transform-gpu pointer-events-none transition-all duration-500",
+            !isMobile && "backdrop-blur-2xl"
+          )} />
+
           {/* Chat Spotlight Glow - Only in Chat Sidebar */}
           <div className={cn(
-            "absolute top-0 left-1/2 -translate-x-1/2 w-[160%] h-[100%] pointer-events-none z-0 opacity-60",
+            "absolute top-0 left-1/2 -translate-x-1/2 w-[160%] h-[100%] pointer-events-none z-0 opacity-60 transition-opacity duration-500",
             darkMode 
               ? "bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.15)_0%,transparent_70%)]" 
               : "bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.08)_0%,transparent_70%)]",
-            isMobile && activeTab !== "chat" && "hidden"
+            isMobile && "hidden"
           )} />
 
         <div className={cn(
@@ -3886,7 +3932,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                     <div 
                       key={d.id}
                       className={cn(
-                        "group p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between backdrop-blur-2xl transform-gpu will-change-[backdrop-filter]",
+                        "group p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between backdrop-blur-2xl transform-gpu",
                         darkMode ? "bg-black/40 border-white/10 hover:border-blue-500" : "bg-white/75 border-black/10 hover:border-blue-400 shadow-sm"
                       )}
                       onClick={() => loadDoc(d)}
@@ -4006,7 +4052,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                   >
                     <div
                       className={cn(
-                        "group relative max-w-[90%] p-3 rounded-2xl text-sm leading-relaxed backdrop-blur-2xl transform-gpu will-change-[backdrop-filter] transition-all duration-500",
+                        "group relative max-w-[90%] p-3 rounded-2xl text-sm leading-relaxed backdrop-blur-2xl transform-gpu transition-all duration-500",
                         msg.role === "user" 
                           ? "bg-blue-600/70 text-white rounded-tr-none shadow-[0_0_20px_rgba(37,99,235,0.4)]" 
                           : cn(
@@ -4070,7 +4116,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                                 const match = /language-(\w+)/.exec(className || "");
                                 const language = match ? match[1] : "text";
                                 return !inline ? (
-                                  <div className="relative rounded-xl overflow-hidden my-4 shadow-2xl backdrop-blur-2xl transform-gpu will-change-[backdrop-filter]">
+                                  <div className="relative rounded-xl overflow-hidden my-4 shadow-2xl backdrop-blur-2xl transform-gpu">
                                     <div className={cn(
                                       "flex items-center justify-between px-4 py-2 border-b text-xs font-mono",
                                       darkMode ? "bg-black/60 border-white/10 text-white" : "bg-white/80 border-black/10 text-gray-900"
@@ -4262,17 +4308,17 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
       <motion.main 
         initial={false}
         animate={isMobile ? {
-          x: activeTab === "preview" ? 0 : "100vw",
-          opacity: activeTab === "preview" ? 1 : 0,
-          width: "100vw"
+          x: activeTab === "preview" ? 0 : "100%",
+          opacity: 1,
+          width: "100%"
         } : {
           x: 0,
           opacity: 1,
           width: "auto"
         }}
-        transition={{ type: "spring", bounce: 0, duration: 0.4 }}
+        transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
         className={cn(
-          "flex-1 flex flex-col overflow-hidden relative z-10 transition-colors duration-500 transform-gpu",
+          "flex-1 flex flex-col overflow-hidden relative transition-colors transform-gpu",
           "bg-transparent",
           isMobile && "absolute top-0 left-0 w-full h-full z-40",
           isMobile && activeTab !== "preview" && "pointer-events-none"
@@ -4280,14 +4326,14 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
       >
         {/* Document Sandbox */}
         <div className={cn(
-          "flex-1 overflow-y-auto px-4 md:px-12 pt-[120px] md:pt-[80px] pb-[240px] custom-scrollbar transition-colors duration-500 z-10 relative",
+          "flex-1 overflow-y-auto px-4 md:px-12 pt-[120px] md:pt-[80px] pb-[240px] custom-scrollbar transition-colors duration-500 relative",
           "bg-transparent"
         )}>
           {/* Document Toolbar - Subheader */}
           {!isInputExpanded && (
             <div className={cn(
-                "z-30 h-[44px] mb-16 flex justify-center w-full pointer-events-none relative",
-                (isMobile && !isLandscape) ? "sticky top-[60px]" : "sticky top-[5px]"
+                "z-[60] h-[44px] mb-16 flex justify-center w-full pointer-events-none sticky",
+                (isMobile && !isLandscape) ? "top-[60px]" : "top-[5px]"
             )}>
               <div 
                 ref={toolbarRef}
@@ -4298,7 +4344,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                   }
                 }}
                 className={cn(
-                  "absolute top-0 left-1/2 -translate-x-1/2 z-30 min-h-[44px] py-[6px] flex flex-col justify-start items-center px-2 md:px-4 shrink-0 shadow-sm rounded-2xl pointer-events-auto transform-gpu will-change-[height] backdrop-blur-xl",
+                  "absolute top-0 left-1/2 -translate-x-1/2 z-[60] min-h-[44px] py-[6px] flex flex-col justify-start items-center px-2 md:px-4 shrink-0 shadow-sm rounded-2xl pointer-events-auto transform-gpu will-change-[height] backdrop-blur-xl",
                   (isMobile && !isLandscape) 
                     ? "w-max max-w-[96vw]" 
                     : "w-max max-w-[95%]",
@@ -4781,7 +4827,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 20 }}
             className={cn(
-              "fixed inset-0 z-[150] flex flex-col transition-all backdrop-blur-xl transform-gpu will-change-[backdrop-filter] ai-code-panel",
+              "fixed inset-0 z-[150] flex flex-col transition-all backdrop-blur-xl transform-gpu ai-code-panel",
               darkMode ? "bg-black/50 border-white/10 text-white" : "bg-white/50 border-black/10 text-gray-900"
             )}
           >
@@ -4863,7 +4909,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 transform-gpu will-change-[backdrop-filter]"
+            className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 transform-gpu"
           >
             <motion.div 
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
@@ -4875,7 +4921,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
               )}
             >
               <div className={cn(
-                "absolute inset-0 border -z-10 backdrop-blur-3xl pointer-events-none transform-gpu will-change-[backdrop-filter]",
+                "absolute inset-0 border -z-10 backdrop-blur-3xl pointer-events-none transform-gpu",
                 darkMode ? "bg-black/80 border-white/10" : "bg-white/90 border-black/10"
               )} />
               <h3 className="text-lg font-bold mb-2">Confirm Action</h3>
@@ -4912,7 +4958,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 transform-gpu will-change-[backdrop-filter]"
+            className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 transform-gpu"
           >
             <motion.div 
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
@@ -4924,7 +4970,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
               )}
             >
               <div className={cn(
-                "absolute inset-0 border -z-10 backdrop-blur-3xl pointer-events-none transform-gpu will-change-[backdrop-filter]",
+                "absolute inset-0 border -z-10 backdrop-blur-3xl pointer-events-none transform-gpu",
                 darkMode ? "bg-black/80 border-white/10" : "bg-white/90 border-black/10"
               )} />
               <h3 className="text-xl font-bold mb-4">
@@ -5156,21 +5202,12 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
           scrollbar-width: none;
         }
 
+        .custom-scrollbar {
+          -ms-overflow-style: none; /* IE and Edge */
+          scrollbar-width: none; /* Firefox */
+        }
         .custom-scrollbar::-webkit-scrollbar {
-          width: 6px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-track {
-          background: transparent;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-          background: #E0E0E0;
-          border-radius: 10px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-          background: #BDBDBD;
-        }
-        .dark .custom-scrollbar::-webkit-scrollbar-thumb {
-          background: #444;
+          display: none;
         }
         
         /* Markdown styles */
