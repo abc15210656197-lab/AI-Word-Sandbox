@@ -84,9 +84,12 @@ export interface ChatAttachment {
   type: string;
   data?: string; // Optional, only populated during API call
   file?: File; // For client-side handling
+  size?: number; // File size in bytes
   previewUrl?: string; // For UI display
   url?: string; // Cloud storage URL (e.g., ImageKit)
+  fileUri?: string; // Gemini File API URI
   extractedText?: string; // For documents like DOCX
+  progress?: number; // Read/upload progress 0-100
 }
 
 export interface ChatMessage {

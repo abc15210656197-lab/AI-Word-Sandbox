@@ -5,6 +5,7 @@
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { GoogleGenAI } from "@google/genai";
+import { PDFDocument } from 'pdf-lib';
 import { motion, AnimatePresence } from "motion/react";
 import { 
   Send, 
@@ -54,7 +55,11 @@ import {
   MoreHorizontal,
   Info,
   LayoutTemplate,
-  AlertCircle
+  AlertCircle,
+  ImageIcon,
+  FileSpreadsheet,
+  Presentation,
+  Cloud
 } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkMath from "remark-math";
@@ -92,6 +97,7 @@ import {
   onSnapshot
 } from "./firebase";
 import ImageKit from "imagekit-javascript";
+import { set as idbSet, get as idbGet } from 'idb-keyval';
 
 const imagekit = new ImageKit({
   urlEndpoint: import.meta.env.VITE_IMAGEKIT_URL_ENDPOINT || "",
@@ -112,6 +118,92 @@ const imagekit = new ImageKit({
     }
   }
 });
+
+async function splitPdfByBytes(file: File, maxBytes = 10 * 1024 * 1024): Promise<File[]> {
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    if (arrayBuffer.byteLength <= maxBytes) return [file];
+
+    const pdfDoc = await PDFDocument.load(arrayBuffer);
+    const totalPages = pdfDoc.getPageCount();
+    
+    if (totalPages === 0) return [file];
+    
+    const files: File[] = [];
+    const bytesPerPage = arrayBuffer.byteLength / totalPages;
+    const pagesPerChunk = Math.max(1, Math.floor(maxBytes / bytesPerPage));
+
+    for (let i = 0; i < totalPages; i += pagesPerChunk) {
+      const chunkPdf = await PDFDocument.create();
+      const end = Math.min(i + pagesPerChunk, totalPages);
+      const copiedPages = await chunkPdf.copyPages(pdfDoc, Array.from({ length: end - i }, (_, index) => i + index));
+      copiedPages.forEach(page => chunkPdf.addPage(page));
+      const pdfBytes = await chunkPdf.save();
+      
+      const partNum = Math.floor(i / pagesPerChunk) + 1;
+      const baseName = file.name.replace(/\.[^/.]+$/, "");
+      files.push(new File([pdfBytes], `${baseName}_part${partNum}.pdf`, { type: 'application/pdf' }));
+    }
+
+    return files;
+  } catch (err) {
+    console.error("Failed to split PDF:", err);
+    return [file];
+  }
+}
+
+async function extractPdfText(file: File): Promise<string> {
+  if (file.size > 10 * 1024 * 1024) {
+    console.log("Skipping local text extraction for large PDF (>10MB). Gemini will handle it via File API.");
+    return "";
+  }
+
+  const formData = new FormData();
+  formData.append('file', file);
+  
+  try {
+    const response = await fetch('/api/extract-pdf-text', {
+      method: 'POST',
+      body: formData
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.warn("PDF extraction server error:", errorText);
+      return ""; // Fallback to empty text, let Gemini handle the file
+    }
+
+    const contentType = response.headers.get("content-type");
+    if (contentType && contentType.includes("application/json")) {
+      const data = await response.json();
+      return data.text || "";
+    } else {
+      const text = await response.text();
+      console.warn("PDF extraction returned non-JSON response:", text.substring(0, 100));
+      return "";
+    }
+  } catch (error) {
+    console.error("PDF extraction fetch failed:", error);
+    return "";
+  }
+}
+
+async function splitFileGeneric(file: File, maxMb = 20): Promise<File[]> {
+  const maxBytes = maxMb * 1024 * 1024;
+  if (file.size <= maxBytes) return [file];
+
+  const resultFiles: File[] = [];
+  const baseName = file.name.substring(0, file.name.lastIndexOf('.')) || file.name;
+  const ext = file.name.substring(file.name.lastIndexOf('.'));
+
+  let offset = 0;
+  while (offset < file.size) {
+    const chunk = file.slice(offset, offset + maxBytes);
+    resultFiles.push(new File([chunk], `${baseName}_${resultFiles.length + 1}${ext}`, { type: file.type }));
+    offset += maxBytes;
+  }
+  return resultFiles;
+}
 
 interface Session {
   id: string;
@@ -694,6 +786,7 @@ interface ChatInputAreaProps {
   onDeleteTemplate: (id: string) => void;
   onEditTemplate: (template: any) => void;
   activeTemplate: any;
+  showToast: (msg: string) => void;
 }
 
 const ChatInputArea = React.memo(({
@@ -716,27 +809,130 @@ const ChatInputArea = React.memo(({
   setNewTemplateModal,
   onDeleteTemplate,
   onEditTemplate,
-  activeTemplate
+  activeTemplate,
+  showToast
 }: ChatInputAreaProps) => {
   const t = translations[lang];
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [isDragging, setIsDragging] = useState(false);
+  const [isSplitting, setIsSplitting] = useState(false);
+  const [splittingProgress, setSplittingProgress] = useState(0);
+  
+  // Google Drive state
+  const [pickerApiLoaded, setPickerApiLoaded] = useState(false);
+  const [googleTokens, setGoogleTokens] = useState<any>(() => {
+    try { return JSON.parse(localStorage.getItem('googleTokens') || 'null'); } catch { return null; }
+  });
+  
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const processFiles = (files: File[]) => {
+  const processFiles = async (files: File[]) => {
     if (files.length === 0) return;
 
-    files.forEach(async file => {
-      const previewUrl = file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined;
-      setAttachments(prev => [...prev, {
-        id: Math.random().toString(36).substring(2, 15),
-        name: file.name,
-        type: file.type,
-        file: file,
-        previewUrl: previewUrl
-      }]);
-    });
+    // We will hold all final files/chunks here
+    const finalAttachments: any[] = [];
+    const uploadTasks: { id: string, file: File }[] = [];
+
+    // Helper to add a file to the processing queue
+    const addFileToQueue = (f: File, customName?: string) => {
+      const id = Math.random().toString(36).substring(2, 15);
+      finalAttachments.push({
+        id,
+        name: customName || f.name,
+        type: f.type,
+        file: f,
+        size: f.size,
+        previewUrl: f.type.startsWith('image/') ? URL.createObjectURL(f) : undefined,
+        progress: 0
+      });
+      uploadTasks.push({ id, file: f });
+    };
+
+    const hasLargePdf = files.some(f => (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) && f.size > 15 * 1024 * 1024);
+    if (hasLargePdf) {
+      setIsSplitting(true);
+      showToast(lang === 'zh' ? '检测到大文件，已自动开启安全拆分传输' : 'Large file detected, starting secure split transfer...');
+    }
+
+    const isPlaceholderKey = (key: string) => {
+      if (!key) return true;
+      const k = key.toLowerCase();
+      return k === "my_gemini_api_key" || 
+             k.includes("your_api_key") || 
+             k === "undefined" || 
+             k === "null" ||
+             k === "placeholder" ||
+             k === "ai studio free tier";
+    };
+
+    const apiKey = (process.env.GEMINI_API_KEY || (import.meta as any).env?.VITE_GEMINI_API_KEY || "").trim();
+    const hasValidKey = apiKey && !isPlaceholderKey(apiKey);
+
+    for (const f of files) {
+      if ((f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) && f.size > 15 * 1024 * 1024) {
+        try {
+          setIsSplitting(true);
+          setSplittingProgress(0);
+          const splitRes = await uploadToSplitPDF(f, (p) => setSplittingProgress(p));
+          if (splitRes && splitRes.length > 1) {
+            for (const part of splitRes) {
+              addFileToQueue(part);
+            }
+          } else {
+             addFileToQueue(f);
+          }
+        } catch (e) {
+          console.error("Failed to split PDF on server:", e);
+          addFileToQueue(f);
+        } finally {
+          setIsSplitting(false);
+        }
+      } else {
+        addFileToQueue(f);
+      }
+    }
+
+    setIsSplitting(false);
+
+    // Update state ONCE. Do NOT put 'data' in state to prevent OOM.
+    setAttachments(prev => [...prev, ...finalAttachments]);
+
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    for (const task of uploadTasks) {
+      // Check if the component is still mounted or if attachments were cleared
+      // if (attachments.length === 0 && !isSplitting) break; 
+
+      const { id: currentId, file: chunk } = task;
+
+      let progressInterval: NodeJS.Timeout | undefined;
+      try {
+        setAttachments(prev => prev.map(a => a.id === currentId ? { ...a, progress: 10 } : a));
+        
+        const result = await processFileForApi(chunk, hasValidKey ? apiKey! : "", (p) => {
+          setAttachments(prev => prev.map(a => a.id === currentId ? { ...a, progress: p } : a));
+        });
+
+        setAttachments(prev => prev.map(a => a.id === currentId ? { 
+          ...a, 
+          progress: 100, 
+          fileUri: result.fileUri,
+          extractedText: result.extractedText,
+          // We intentionally do NOT save result.data here
+          url: result.url 
+        } : a));
+      } catch (err: any) {
+        console.error("File processing failed", err);
+        setAttachments(prev => prev.map(a => a.id === currentId ? { ...a, progress: -1, errorMsg: err.message } : a));
+      } finally {
+        if (progressInterval) clearInterval(progressInterval);
+      }
+
+      // Add a 2 second delay between single uploads!
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+
   };
 
   const handleSend = () => {
@@ -755,6 +951,122 @@ const ChatInputArea = React.memo(({
     // Reset file input
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
+    }
+  };
+
+  // Google Drive Integration
+  useEffect(() => {
+    const script = document.createElement('script');
+    script.src = 'https://apis.google.com/js/api.js';
+    script.onload = () => {
+      (window as any).gapi.load('picker', () => {
+        setPickerApiLoaded(true);
+      });
+    };
+    document.body.appendChild(script);
+  }, []);
+
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'GOOGLE_OAUTH_SUCCESS') {
+        const tokens = event.data.tokens;
+        setGoogleTokens(tokens);
+        localStorage.setItem('googleTokens', JSON.stringify(tokens));
+        showToast(lang === 'zh' ? 'Google账户连接成功' : 'Google account linked');
+        showPicker(tokens);
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [lang, pickerApiLoaded]);
+
+  const connectGoogleDrive = async () => {
+    try {
+      const res = await fetch('/api/auth/google/url');
+      const { url } = await res.json();
+      if (url) {
+        window.open(url, "GoogleAuth", "width=500,height=600");
+      }
+    } catch (e: any) {
+      console.error(e);
+      showToast(lang === 'zh' ? "连接失败" : "Connection failed");
+    }
+  };
+
+  const showPicker = (tokens: any) => {
+    const apiKey = import.meta.env.VITE_GOOGLE_API_KEY;
+    if (!apiKey) {
+      showToast(lang === 'zh' ? '请在左侧“设置”菜单中配置 VITE_GOOGLE_API_KEY，并在 Google Cloud 启用 Google Picker API' : 'Please configure VITE_GOOGLE_API_KEY in Settings and enable Google Picker API');
+      return;
+    }
+    
+    if (!pickerApiLoaded || !(window as any).google?.picker) {
+      showToast(lang === 'zh' ? 'Google 选择器正在加载，请稍后重试' : 'Google Picker is initializing, please try again');
+      return;
+    }
+
+    try {
+      const view = new (window as any).google.picker.DocsView((window as any).google.picker.ViewId.DOCS)
+        .setIncludeFolders(true)
+        .setSelectFolderEnabled(false);
+
+      // 强制使用完整 Origin，包含端口（如果有）
+      const origin = window.location.origin;
+
+      const picker = new (window as any).google.picker.PickerBuilder()
+        .addView(view)
+        .setOAuthToken(tokens.access_token)
+        .setDeveloperKey(apiKey)
+        .setOrigin(origin)
+        .setCallback((data: any) => {
+          if (data.action === (window as any).google.picker.Action.PICKED) {
+            const file = data.docs[0];
+            addFromDrive(file.id, file.name, file.mimeType);
+          }
+        })
+        .build();
+      
+      picker.setVisible(true);
+      
+      // 添加提示：如果用户在 iFrame 中看到的依然是白屏
+      setTimeout(() => {
+        showToast(lang === 'zh' ? '如果看到白屏，请点击右上角“在新页签中打开”' : 'If you see a white screen, please click "Open in New Tab"');
+      }, 2000);
+
+    } catch (e) {
+      console.error('Picker error:', e);
+      showToast(lang === 'zh' ? '启动选择器失败，请检查是否在 Cloud Console 中启用了 Google Picker API' : 'Failed to launch picker, please check if Google Picker API is enabled in Cloud Console');
+    }
+  };
+
+  const handleOpenDrive = () => {
+    if (googleTokens?.access_token) {
+      showToast(lang === 'zh' ? '正在加载 Google Drive...' : 'Opening Google Drive...');
+      showPicker(googleTokens);
+    } else {
+      showToast(lang === 'zh' ? '正在跳转授权...' : 'Redirecting to auth...');
+      connectGoogleDrive();
+    }
+  };
+
+  const addFromDrive = async (fileId: string, fileName: string, mimeType: string) => {
+    try {
+      showToast(lang === 'zh' ? `正在下载 ${fileName}...` : `Downloading ${fileName}...`);
+      
+      const res = await fetch('/api/drive/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tokens: googleTokens, fileId })
+      });
+      
+      if (!res.ok) throw new Error("Download failed");
+      const blob = await res.blob();
+      const file = new File([blob], fileName, { type: mimeType });
+      
+      processFiles([file]);
+    } catch (e) {
+      console.error(e);
+      showToast(lang === 'zh' ? "下载文件失败" : "Failed to download file");
     }
   };
 
@@ -788,6 +1100,8 @@ const ChatInputArea = React.memo(({
       return prev.filter((_, i) => i !== index);
     });
   };
+
+  const isUploading = attachments.some(a => typeof a.progress === 'number' && a.progress < 100 && a.progress >= 0);
 
   return (
     <div 
@@ -845,8 +1159,6 @@ const ChatInputArea = React.memo(({
         )}
       </AnimatePresence>
 
-      {/* Background element removed to apply material directly to textarea */}
-
       <div className={cn(
         "relative flex flex-col gap-2 transition-all duration-500",
         isInputExpanded && (darkMode ? "bg-black/40 p-4 rounded-xl border border-white/10 shadow-2xl h-full" : "bg-white/60 p-4 rounded-xl border border-black/10 shadow-2xl h-full")
@@ -867,26 +1179,162 @@ const ChatInputArea = React.memo(({
           </div>
         )}
         
-        {attachments.length > 0 && (
-          <div className="flex flex-wrap gap-2 mb-2">
-            {attachments.map((att, idx) => (
-              <div key={idx} className="relative group">
-                {att.type.startsWith('image/') && att.previewUrl ? (
-                  <img src={att.previewUrl} alt={att.name} className="w-16 h-16 object-cover rounded-lg shadow-sm" />
-                ) : (
-                  <div className={cn("w-16 h-16 flex flex-col items-center justify-center rounded-lg text-xs overflow-hidden p-1 shadow-sm", darkMode ? "bg-white/5 text-gray-400" : "bg-gray-100 text-gray-500")}>
-                    <FileText size={20} className="mb-1" />
-                    <span className="truncate w-full text-center">{att.name}</span>
-                  </div>
-                )}
-                <button
-                  onClick={() => removeAttachment(idx)}
-                  className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+        {(attachments.length > 0 || isSplitting) && (
+          <div className="relative mb-6 group/scroll-container">
+            {/* Scroll Shadows */}
+            <div className={cn(
+              "absolute left-0 top-0 bottom-0 w-8 pointer-events-none z-10 bg-gradient-to-r transition-opacity duration-300 opacity-0 group-hover/scroll-container:opacity-100",
+              darkMode ? "from-[#1a1a24] to-transparent" : "from-white to-transparent"
+            )} />
+            <div className={cn(
+              "absolute right-0 top-0 bottom-0 w-8 pointer-events-none z-10 bg-gradient-to-l transition-opacity duration-300 opacity-0 group-hover/scroll-container:opacity-100",
+              darkMode ? "from-[#1a1a24] to-transparent" : "from-white to-transparent"
+            )} />
+
+            <div className="flex flex-nowrap items-center gap-3 overflow-x-auto pb-4 px-4 no-scrollbar scroll-smooth">
+              {attachments.map((att, idx) => (
+                <motion.div 
+                  layout
+                  initial={{ opacity: 0, scale: 0.9, x: 20 }}
+                  animate={{ opacity: 1, scale: 1, x: 0 }}
+                  exit={{ opacity: 0, scale: 0.8, x: -20 }}
+                  key={att.id || idx} 
+                  className={cn(
+                    "relative group shrink-0 overflow-hidden rounded-2xl border flex flex-col w-[200px] transition-all duration-300",
+                    darkMode 
+                      ? "bg-[#25252d]/40 border-white/10 hover:border-blue-500/30 hover:bg-[#2a2a35]/60 shadow-[0_8px_30px_rgba(0,0,0,0.4)] backdrop-blur-md" 
+                      : "bg-white border-gray-100 hover:border-blue-400/30 hover:shadow-xl shadow-md"
+                  )}
                 >
-                  <X size={12} />
-                </button>
-              </div>
-            ))}
+                  {/* Subtle Top-edge Progress Bar */}
+                  {typeof att.progress === 'number' && att.progress < 100 && att.progress >= 0 && (
+                    <div className="absolute top-0 left-0 right-0 h-[3px] bg-gray-500/10 z-20">
+                      <motion.div 
+                        className="h-full bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 shadow-[0_0_10px_rgba(59,130,246,0.6)]"
+                        initial={{ width: 0 }}
+                        animate={{ width: `${Math.max(0, Math.min(100, att.progress))}%` }}
+                        transition={{ duration: 0.4, ease: "circOut" }}
+                      />
+                    </div>
+                  )}
+
+                  {/* Delete Button */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setAttachments(prev => prev.filter(a => a.id !== att.id));
+                    }}
+                    className={cn(
+                      "absolute top-2 right-2 p-1.5 rounded-full opacity-0 group-hover:opacity-100 transition-all z-30",
+                      darkMode ? "bg-black/40 hover:bg-red-500/80 text-white shadow-xl" : "bg-white/80 hover:bg-red-500 text-gray-700 hover:text-white shadow-sm"
+                    )}
+                  >
+                    <X size={14} strokeWidth={2.5} />
+                  </button>
+
+                  <div className="p-4 flex items-center gap-4">
+                    {/* Visual Asset Container */}
+                    <div className="shrink-0 relative">
+                      {att.type.startsWith('image/') && att.previewUrl ? (
+                        <div className="w-12 h-12 rounded-xl overflow-hidden border border-white/5 shadow-2xl transition-transform duration-500 group-hover:scale-110">
+                          <img src={att.previewUrl} alt={att.name} className="w-full h-full object-cover" />
+                        </div>
+                      ) : (
+                        <div className={cn(
+                          "w-12 h-12 flex items-center justify-center rounded-2xl bg-gradient-to-br transition-all duration-500 group-hover:scale-110 shadow-lg", 
+                          darkMode ? "from-white/[0.08] to-transparent" : "from-black/[0.05] to-transparent",
+                          getFileIconColor(att.type, att.name)
+                        )}>
+                          <FileIconForType type={att.type} name={att.name || ''} size={28} />
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Metadata */}
+                    <div className="flex flex-col min-w-0 flex-1">
+                      <span className={cn(
+                        "text-[14px] font-bold truncate leading-none mb-2", 
+                        darkMode ? "text-gray-100" : "text-gray-800"
+                      )}>
+                        {att.name}
+                      </span>
+                      <div className="flex flex-col gap-1">
+                        {typeof att.progress === 'number' && att.progress < 100 && att.progress >= 0 ? (
+                          <div className="flex items-center gap-2">
+                             <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse shadow-[0_0_5px_rgba(59,130,246,0.8)]" />
+                             <span className="text-[11px] font-black text-blue-400 font-mono tracking-tighter">
+                                {Math.round(att.progress)}%
+                             </span>
+                          </div>
+                        ) : att.progress === -1 ? (
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-[11px] text-rose-500 font-black flex items-center gap-1.5 bg-rose-500/10 px-2 py-0.5 rounded-full w-fit">
+                              <AlertCircle size={10} /> {lang === 'zh' ? '失败' : 'Failed'}
+                            </span>
+                            {(att as any).errorMsg && (
+                              <span className="text-[9px] text-rose-400 capitalize truncate max-w-[150px] px-1">
+                                {(att as any).errorMsg}
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className={cn(
+                            "text-[11px] font-black uppercase tracking-[0.1em] opacity-40 px-2 py-0.5 bg-gray-500/5 rounded-full w-fit", 
+                            darkMode ? "text-gray-300" : "text-gray-600"
+                          )}>
+                            {att.size ? `${(att.size / 1024 / 1024).toFixed(1)}MB` : (att.file ? `${(att.file.size / 1024 / 1024).toFixed(1)}MB` : (lang === 'zh' ? '已就绪' : 'Ready'))}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Remove button */}
+                  <button
+                    onClick={() => removeAttachment(idx)}
+                    className={cn(
+                      "absolute top-3 right-3 p-1.5 rounded-full transition-all duration-300 z-30",
+                      "opacity-0 group-hover:opacity-100 backdrop-blur-md",
+                      darkMode 
+                        ? "bg-white/5 hover:bg-rose-500/30 text-gray-400 hover:text-white" 
+                        : "bg-black/5 hover:bg-rose-500/20 text-gray-500 hover:text-rose-600"
+                    )}
+                  >
+                    <X size={14} />
+                  </button>
+                </motion.div>
+              ))}
+
+              {isSplitting && (
+                 <motion.div
+                  initial={{ opacity: 0, scale: 0.9, y: 10 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.9, y: 10 }}
+                  className={cn(
+                    "flex-shrink-0 flex group overflow-hidden w-[200px] h-[72px] items-center justify-center",
+                    "border backdrop-blur-xl rounded-2xl relative shadow-sm border-dashed",
+                    "transition-all duration-300",
+                    darkMode ? "bg-[#18181b]/50 border-white/10" : "bg-white/50 border-black/10"
+                  )}
+                 >
+                    {/* Top progress bar for splitting */}
+                    <div className="absolute top-0 left-0 right-0 h-[3px] bg-gray-500/10 z-20">
+                      <motion.div 
+                        className="h-full bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 shadow-[0_0_10px_rgba(59,130,246,0.6)]"
+                        initial={{ width: 0 }}
+                        animate={{ width: `${Math.max(0, Math.min(100, splittingProgress))}%` }}
+                        transition={{ duration: 0.2, ease: "linear" }}
+                      />
+                    </div>
+                    <div className="flex flex-col justify-center items-center gap-2">
+                       <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
+                       <span className={cn("text-xs font-medium", darkMode ? "text-gray-300" : "text-gray-600")}>
+                          {lang === 'zh' ? '正在处理文件...' : 'Processing file...'} {splittingProgress > 0 ? `${splittingProgress}%` : ''}
+                       </span>
+                    </div>
+                 </motion.div>
+              )}
+            </div>
           </div>
         )}
 
@@ -915,7 +1363,7 @@ const ChatInputArea = React.memo(({
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                handleSend();
+                if (!isUploading && !isSplitting) handleSend();
               }
             }}
             placeholder={t.typeInstructions}
@@ -963,6 +1411,16 @@ const ChatInputArea = React.memo(({
             >
               <Plus size={20} />
             </button>
+            <button
+              onClick={handleOpenDrive}
+              className={cn(
+                "p-2 rounded-lg transition-colors flex items-center justify-center text-gray-400 hover:text-green-500",
+                darkMode ? "hover:bg-white/5" : "hover:bg-black/5"
+              )}
+              title={lang === 'zh' ? '从 Google Drive 添加' : 'Add from Google Drive'}
+            >
+              <Cloud size={20} />
+            </button>
             <ModelSelector 
               selected={selectedModel} 
               onChange={setSelectedModel} 
@@ -999,7 +1457,7 @@ const ChatInputArea = React.memo(({
             {/* Mobile Agent Button removed from here */}
             <button
               onClick={handleSend}
-              disabled={isLoading || (!input.trim() && attachments.length === 0)}
+              disabled={isLoading || isUploading || isSplitting || (!input.trim() && attachments.length === 0) || attachments.some(a => typeof a.progress === 'number' && a.progress < 100)}
               className="bg-blue-600 hover:bg-blue-700 text-white p-2.5 rounded-xl disabled:opacity-40 transition-all shadow-sm hover:shadow-md active:scale-95"
             >
               <Send size={20} />
@@ -1010,6 +1468,329 @@ const ChatInputArea = React.memo(({
     </div>
   );
 });
+
+export const fileToBase64 = (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    const timeout = setTimeout(() => {
+      reject(new Error("File reading timed out"));
+    }, 60000);
+
+    reader.onload = () => {
+      clearTimeout(timeout);
+      const base64 = (reader.result as string).split(',')[1];
+      resolve(base64);
+    };
+    reader.onerror = (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    };
+    reader.readAsDataURL(file);
+  });
+};
+
+export const uploadToSplitPDF = (file: File, onProgress?: (p: number) => void): Promise<File[]> => {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const CHUNK_SIZE = 15 * 1024 * 1024;
+      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+      const uuid = Math.random().toString(36).substring(2) + Date.now().toString(36);
+      
+      let splitResponse: any = null;
+
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const chunk = file.slice(start, end);
+
+        const formData = new FormData();
+        formData.append('file', chunk);
+        formData.append('chunkIndex', i.toString());
+        formData.append('totalChunks', totalChunks.toString());
+        formData.append('uuid', uuid);
+        formData.append('fileName', file.name);
+
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/split-pdf', true);
+        
+        if (onProgress) {
+          xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) {
+              const chunkProgress = e.loaded / e.total;
+              const overallProgress = Math.round(((i + chunkProgress) / totalChunks) * 100);
+              onProgress(overallProgress);
+            }
+          };
+        }
+        
+        const response: any = await new Promise((res, rej) => {
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              res(JSON.parse(xhr.responseText));
+            } else {
+              let errText = xhr.responseText;
+              try { errText = JSON.parse(errText).error; } catch(e){}
+              rej(new Error(errText || "Failed to split PDF chunk"));
+            }
+          };
+          xhr.onerror = () => rej(new Error("Network error during PDF split"));
+          xhr.send(formData);
+        });
+
+        if (response && response.files) {
+          splitResponse = response.files;
+        }
+      }
+
+      if (splitResponse && splitResponse.length > 0) {
+        const finalFiles: File[] = [];
+        for (const fileInfo of splitResponse) {
+          try {
+            const blobRes = await fetch(fileInfo.url);
+            const blob = await blobRes.blob();
+            finalFiles.push(new File([blob], fileInfo.name, { type: 'application/pdf' }));
+          } catch(e) {
+            console.error("Failed to download PDF part", e);
+          }
+        }
+        if (finalFiles.length > 0) resolve(finalFiles);
+        else reject(new Error("No valid PDF parts downloaded"));
+      } else {
+        reject(new Error("Server returned empty split response"));
+      }
+    } catch (e) {
+      reject(e);
+    }
+  });
+};
+
+
+
+export const uploadFileToGemini = (file: File, apiKey?: string, onProgress?: (percent: number) => void): Promise<string> => {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const CHUNK_SIZE = 15 * 1024 * 1024; // 15MB chunks
+      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+      const uuid = Math.random().toString(36).substring(2) + Date.now().toString(36);
+      
+      let fileInfo: any = null;
+
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const chunk = file.slice(start, end);
+
+        const formData = new FormData();
+        formData.append('file', chunk);
+        formData.append('chunkIndex', i.toString());
+        formData.append('totalChunks', totalChunks.toString());
+        formData.append('uuid', uuid);
+        formData.append('fileName', file.name);
+        formData.append('mimeType', file.type || "application/octet-stream");
+        if (apiKey) {
+          formData.append('apiKey', apiKey);
+        }
+
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/gemini/upload', true);
+        
+        const response: any = await new Promise((res, rej) => {
+          xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable && onProgress) {
+               const chunkProgress = e.loaded / e.total;
+               const overallProgress = Math.round(((i + chunkProgress) / totalChunks) * 95);
+               onProgress(overallProgress);
+            }
+          };
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              res(JSON.parse(xhr.responseText));
+            } else {
+              let errObj;
+              try { errObj = JSON.parse(xhr.responseText); } catch(e) { errObj = { error: { message: xhr.statusText } }; }
+              rej(new Error(errObj.error?.message || errObj.error || xhr.statusText));
+            }
+          };
+          xhr.onerror = () => rej(new Error("Network error during file chunk upload"));
+          xhr.timeout = 300000;
+          xhr.ontimeout = () => rej(new Error("Timeout during file chunk upload"));
+          xhr.send(formData);
+        });
+
+        if (response && response.file) {
+          fileInfo = response;
+        }
+      }
+
+      if (fileInfo && fileInfo.file && fileInfo.file.uri) {
+        if (onProgress) onProgress(100);
+        resolve(fileInfo.file.uri);
+      } else {
+        reject(new Error("Failed to get file URI after uploading all chunks"));
+      }
+    } catch (error) {
+      reject(error);
+    }
+  });
+};
+
+export const processFileForApi = (
+  file: File, 
+  apiKey?: string, 
+  onProgress?: (p: number) => void
+): Promise<{data?: string, fileUri?: string, mimeType: string, url?: string, extractedText?: string}> => {
+  return new Promise(async (resolve, reject) => {
+    let extractedText: string | undefined;
+    if ((file.name.toLowerCase().endsWith('.docx') || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') && file.size < 5 * 1024 * 1024) {
+      try {
+        const parsed = await parseWordDoc(file);
+        extractedText = parsed.sections.map(s => s.paragraphs.map(p => {
+          if (p.type === 'table') return '[Table]';
+          if (p.type === 'image') return '[Image]';
+          if (p.type === 'formula') return '[Formula]';
+          const para = p as DocParagraph;
+          return para.runs?.map(r => r.text).join('') || para.text || '';
+        }).join('\n')).join('\n\n');
+      } catch (err) {
+        console.error("Failed to parse Word doc for API", err);
+      }
+    } else if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+      try {
+        // Automatically extract text for small PDFs as a fallback or context provider
+        // Large PDFs will be handled by Gemini File API directly
+        extractedText = await extractPdfText(file);
+      } catch (err) {
+        console.error("Non-fatal error in PDF text extraction:", err);
+      }
+    }
+
+    try {
+      let fileUri: string | undefined;
+      let data: string | undefined;
+      let uploadUrl: string | undefined;
+
+      const isPlaceholderKey = (key: string) => {
+        if (!key) return true;
+        const k = key.toLowerCase();
+        return k === "my_gemini_api_key" || 
+               k.includes("your_api_key") ||
+               k === "undefined" ||
+               k === "null" ||
+               k === "placeholder" ||
+               k === "ai studio free tier";
+      };
+
+      const hasValidKey = apiKey && !isPlaceholderKey(apiKey);
+
+      // Start concurrent tasks
+      const tasks: Promise<any>[] = [];
+
+      // Start a smooth progress simulation
+      let currentProgress = 0;
+      const progressTimer = setInterval(() => {
+        currentProgress += (90 - currentProgress) * 0.1; // Ease-out toward 90%
+        if (onProgress) onProgress(currentProgress);
+      }, 500);
+
+      // Task 1: ImageKit for preview
+      if (import.meta.env.VITE_IMAGEKIT_PUBLIC_KEY) {
+        tasks.push((async () => {
+          try {
+            const result = await new Promise<any>((res, rej) => {
+              imagekit.upload({
+                file: file,
+                fileName: file.name || "upload_file",
+                tags: ["ai-doc-editor"]
+              } as any, (err: any, result: any) => {
+                if (err) rej(err);
+                else res(result);
+              });
+            });
+            uploadUrl = result.url;
+          } catch (err) {
+            console.error("ImageKit upload failed", err);
+          }
+        })());
+      }
+
+      // Task 2: Gemini or Base64
+      tasks.push((async () => {
+        if (file.type.startsWith('video/') || file.type.startsWith('application/pdf') || file.name.toLowerCase().endsWith('.pdf') || file.name.toLowerCase().endsWith('.docx') || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.size > 15 * 1024 * 1024) {
+          try {
+            fileUri = await uploadFileToGemini(file, hasValidKey ? apiKey! : "");
+          } catch (err: any) {
+            // Check if it's an API key error to "ignore" or handle silently
+            const errorText = err?.message || JSON.stringify(err);
+            const isApiKeyError = errorText.includes("API key not valid") || errorText.includes("API_KEY_INVALID");
+            
+            if (!isApiKeyError) {
+              console.error("Gemini upload failed during processing", err);
+            }
+            
+            // Fallback to base64 if <= 20MB
+            if (file.size <= 20 * 1024 * 1024) {
+              if (!isApiKeyError) console.log("Falling back to Base64 (inlineData) because Gemini upload failed");
+              try {
+                data = await fileToBase64(file);
+              } catch (e) {
+                console.error("Base64 conversion failed", e);
+                if (!isApiKeyError) reject(new Error("Failed to process file locally: " + e));
+              }
+            } else if (!isApiKeyError) {
+              reject(new Error("File too large for local processing. Limits to 20MB per chunk."));
+            }
+          }
+        } else {
+          try {
+            data = await fileToBase64(file);
+          } catch (err) {
+            console.error("Base64 conversion failed", err);
+            reject(new Error("Failed to process file locally: " + err));
+          }
+        }
+      })());
+
+      try {
+        await Promise.all(tasks);
+      } finally {
+        clearInterval(progressTimer);
+      }
+      if (onProgress) onProgress(100);
+
+      resolve({ data, fileUri, mimeType: file.type, url: uploadUrl, extractedText });
+    } catch (err) {
+      reject(err);
+    }
+  });
+};
+
+const getFileIconColor = (type: string, name: string = '') => {
+  const lcName = name.toLowerCase();
+  if (type.startsWith('image/')) return 'text-gray-400';
+  if (type === 'application/pdf' || lcName.endsWith('.pdf')) return 'text-amber-500';
+  if (lcName.endsWith('.docx') || type.includes('word')) return 'text-blue-500';
+  if (lcName.endsWith('.xlsx') || type.includes('excel') || type.includes('spreadsheet')) return 'text-emerald-500';
+  if (lcName.endsWith('.pptx') || type.includes('presentation')) return 'text-rose-500';
+  return 'text-gray-500';
+};
+
+const getFileProgressBgColor = (type: string, name: string = '') => {
+  const lcName = name.toLowerCase();
+  if (type.startsWith('image/')) return 'bg-gray-500/10';
+  if (type === 'application/pdf' || lcName.endsWith('.pdf')) return 'bg-amber-500/20';
+  if (lcName.endsWith('.docx') || type.includes('word')) return 'bg-blue-500/20';
+  if (lcName.endsWith('.xlsx') || type.includes('excel') || type.includes('spreadsheet')) return 'bg-emerald-500/20';
+  if (lcName.endsWith('.pptx') || type.includes('presentation')) return 'bg-rose-500/20';
+  return 'bg-gray-500/20';
+};
+
+const FileIconForType = ({ type, name, size = 24 }: { type: string, name: string, size?: number }) => {
+  const lcName = name.toLowerCase();
+  if (type.startsWith('image/')) return <ImageIcon size={size} />;
+  if (lcName.endsWith('.xlsx') || type.includes('excel') || type.includes('spreadsheet')) return <FileSpreadsheet size={size} />;
+  if (lcName.endsWith('.pptx') || type.includes('presentation')) return <Presentation size={size} />;
+  return <FileText size={size} />;
+};
 
 export default function App() {
   const [lang, setLang] = useState<'en' | 'zh'>(() => (localStorage.getItem('lang') as 'en' | 'zh') || 'zh');
@@ -1028,6 +1809,12 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [splashComplete, setSplashComplete] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3500);
+  };
   const [minSplashTimeReached, setMinSplashTimeReached] = useState(false);
   const [lastJson, setLastJson] = useState<string>("");
   const [savedDocs, setSavedDocs] = useState<any[]>([]);
@@ -1044,7 +1831,7 @@ export default function App() {
       turnHistory: []
     }
   ]);
-  const [customTemplates, setCustomTemplates] = useState<{id: string, name: string, desc?: string, prompt: string, attachments?: {name: string, type: string, data?: string, extractedText?: string}[]}[]>(() => {
+  const [customTemplates, setCustomTemplates] = useState<{id: string, name: string, desc?: string, prompt: string, attachments?: ChatAttachment[]}[]>(() => {
     const defaultEssayTemplate = {
       id: "essay-migrated",
       name: "作文格式",
@@ -1068,7 +1855,7 @@ export default function App() {
   const [newTemplateModal, setNewTemplateModal] = useState(false);
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
-  const [newTemplateData, setNewTemplateData] = useState<{name: string, prompt: string, attachments?: {name: string, type: string, data?: string, extractedText?: string}[], error?: string}>({ name: '', prompt: '', attachments: [] });
+  const [newTemplateData, setNewTemplateData] = useState<{name: string, prompt: string, attachments?: ChatAttachment[], error?: string}>({ name: '', prompt: '', attachments: [] });
   const [isGeneratingTemplate, setIsGeneratingTemplate] = useState(false);
   
   useEffect(() => {
@@ -1356,12 +2143,20 @@ export default function App() {
     // Attempt multiple sources for the API key
     const apiKey = process.env.GEMINI_API_KEY || (import.meta as any).env?.VITE_GEMINI_API_KEY;
     
-    if (apiKey) {
-      console.log("Lazy initializing AI with API Key...");
-      aiRef.current = new GoogleGenAI({ apiKey });
-      return aiRef.current;
+    const isPlaceholder = apiKey === "MY_GEMINI_API_KEY" || (apiKey && apiKey.includes("YOUR_API_KEY"));
+    if (isPlaceholder) {
+      console.warn("⚠️ [Client] Detected placeholder GEMINI_API_KEY. Please select 'AI Studio Free Tier' or enter a valid key in the Secrets menu and click 'Apply changes'.");
+    } else if (!apiKey) {
+      console.log("✅ [Client] Lazy initializing AI (empty key, assuming Free Tier proxy).");
+    } else {
+      console.log("✅ [Client] Lazy initializing AI with detected key.");
     }
-    return null;
+    
+    const clientOptions: any = {};
+    if (apiKey) clientOptions.apiKey = apiKey;
+    
+    aiRef.current = new GoogleGenAI(clientOptions);
+    return aiRef.current;
   }, []);
 
   // Initialize AI
@@ -1464,10 +2259,23 @@ export default function App() {
     if (!currentUser) return;
     try {
       // Strip heavy data like base64 or File objects before saving to Firestore (1MB limit)
+      // Only strip `data` if we have a `url` from ImageKit to fall back on.
       const cleanMsgs = currentMsgs.map(m => ({
         ...m,
         attachments: m.attachments?.map(a => {
-          const { data, file, ...rest } = a;
+          const { file, ...rest } = a;
+          if (rest.type?.startsWith('image/')) {
+            const { data, ...restWithoutData } = rest;
+            if (data && !restWithoutData.url) {
+               idbSet(`attachment_${restWithoutData.id}`, data).catch(console.error);
+            }
+            return restWithoutData;
+          }
+          if (rest.url) {
+            const { data, ...restWithoutData } = rest;
+            return restWithoutData;
+          }
+          // If there's no URL and it's not an image, keep `data` (e.g. small text data)
           return rest;
         })
       }));
@@ -1491,7 +2299,7 @@ export default function App() {
     }
   };
 
-  const loadDoc = (docItem: any) => {
+  const loadDoc = async (docItem: any) => {
     try {
       // Check if this doc is already open in a session
       const existingSession = sessions.find(s => s.currentDocId === docItem.id);
@@ -1514,15 +2322,25 @@ export default function App() {
       let messages = docItem.messages ? (typeof docItem.messages === 'string' ? JSON.parse(docItem.messages) : docItem.messages) : [];
       
       // Clear previewUrls as blob URLs are invalid across page reloads
-      messages = messages.map((msg: any) => {
+      // and load missing image data from IndexedDB
+      messages = await Promise.all(messages.map(async (msg: any) => {
         if (msg.attachments) {
-          return {
-            ...msg,
-            attachments: msg.attachments.map((att: any) => ({ ...att, previewUrl: undefined }))
-          };
+          const loadedAttachments = await Promise.all(msg.attachments.map(async (att: any) => {
+            let data = att.data;
+            if (!data && att.type?.startsWith('image/') && !att.url) {
+              try {
+                const storedData = await idbGet(`attachment_${att.id}`);
+                if (storedData) data = storedData;
+              } catch (e) {
+                console.error("Failed to load attachment data from IDB", e);
+              }
+            }
+            return { ...att, previewUrl: undefined, data };
+          }));
+          return { ...msg, attachments: loadedAttachments };
         }
         return msg;
-      });
+      }));
       
       // Create new session for this doc
       const newId = Math.random().toString(36).substring(7);
@@ -1797,118 +2615,21 @@ export default function App() {
       ));
     }
 
-    // Helper to read file as base64
-    const fileToBase64 = (file: File): Promise<string> => {
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        const timeout = setTimeout(() => {
-          reject(new Error("File reading timed out"));
-        }, 10000);
-
-        reader.onload = () => {
-          clearTimeout(timeout);
-          const base64 = (reader.result as string).split(',')[1];
-          resolve(base64);
-        };
-        reader.onerror = (err) => {
-          clearTimeout(timeout);
-          reject(err);
-        };
-        reader.readAsDataURL(file);
-      });
-    };
-
-    const processFileForApi = (file: File): Promise<{data: string, mimeType: string, url?: string, extractedText?: string}> => {
-      return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error("File processing timed out"));
-        }, 30000);
-
-        if (file.name.toLowerCase().endsWith('.docx') || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-          parseWordDoc(file).then(parsed => {
-            const text = parsed.sections.map(s => s.paragraphs.map(p => {
-              if (p.type === 'table') return '[Table]';
-              if (p.type === 'image') return '[Image]';
-              if (p.type === 'formula') return '[Formula]';
-              const para = p as DocParagraph;
-              return para.runs?.map(r => r.text).join('') || para.text || '';
-            }).join('\n')).join('\n\n');
-            
-            fileToBase64(file).then(base64 => {
-              clearTimeout(timeout);
-              resolve({ data: base64, mimeType: file.type, extractedText: text });
-            }).catch(err => {
-              clearTimeout(timeout);
-              reject(err);
-            });
-          }).catch(err => {
-            console.error("Failed to parse Word doc for API", err);
-            fileToBase64(file).then(base64 => {
-              clearTimeout(timeout);
-              resolve({ data: base64, mimeType: file.type });
-            }).catch(err2 => {
-              clearTimeout(timeout);
-              reject(err2);
-            });
-          });
-          return;
-        }
-
-        fileToBase64(file).then(async base64 => {
-          let uploadUrl;
-          if (file.type.startsWith('image/')) {
-            try {
-              if (import.meta.env.VITE_IMAGEKIT_PUBLIC_KEY) {
-                const response = await new Promise<any>((res, rej) => {
-                  imagekit.upload({
-                    file: base64,
-                    fileName: file.name || "upload.img",
-                    tags: ["ai-doc-editor"]
-                  } as any, (err: any, result: any) => {
-                    if (err) rej(err);
-                    else res(result);
-                  });
-                });
-                uploadUrl = response.url;
-              }
-            } catch (err) {
-              console.error("ImageKit upload failed:", err);
-            }
-          }
-          clearTimeout(timeout);
-          resolve({ data: base64, mimeType: file.type, url: uploadUrl });
-        }).catch(err => {
-          clearTimeout(timeout);
-          reject(err);
-        });
-      });
-    };
-
-    // Convert current attachments to base64 for the API call
-    const currentAttachmentsWithData = await Promise.all(finalAttachments.map(async att => {
-      if (att.file) {
-        try {
-          const processed = await processFileForApi(att.file);
-          return { ...att, data: processed.data, type: processed.mimeType, url: processed.url };
-        } catch (e) {
-          console.error("Failed to process file", e);
-          return att;
-        }
-      }
-      return att;
-    }));
+    // Final check: filter out failed attachments to prevent crash
+    const validAttachments = finalAttachments.filter(att => 
+      (att.data || att.fileUri || att.url || att.extractedText || att.file) && (att.progress === 100 || att.progress === undefined)
+    );
 
     let currentMessages = [...session.messages];
     if (!isRetry && !isSilent) {
-      const historyAttachments = currentAttachmentsWithData
-        .filter(att => attachments.some(a => a.id === att.id))
-        .map(att => ({
+      const historyAttachments = validAttachments.map(att => ({
         id: att.id,
         name: att.name,
         type: att.type,
         previewUrl: att.previewUrl,
         url: att.url,
         data: att.data,
+        fileUri: att.fileUri,
         extractedText: att.extractedText
       }));
       const userMessage: ChatMessage = { role: "user", text: promptToUse, attachments: historyAttachments };
@@ -1923,14 +2644,30 @@ export default function App() {
 
     try {
       let currentDocState = session.docState;
-      const userRequestText = finalPrompt.trim() || (attachments.length > 0 ? "请处理我上传的文件并根据其内容更新文档。" : "");
+      const userRequestText = finalPrompt.trim() || (attachments.length > 0 ? (lang === 'zh' ? "请处理我上传的文件并根据其内容更新文档。" : "Please process the uploaded files and update the document accordingly.") : "");
       
       const attachmentContextText = attachments.length > 0 
         ? `\n\n【用户上传的附件信息】\n系统识别到用户上传了 ${attachments.length} 个文件。\n` + 
           attachments.map(a => `- ${a.name} (${a.type})`).join("\n") + "\n\n"
         : "";
 
-      // Limit history to last 10 messages
+      // Re-load actual content for files that were stored as File objects but not base64 in state
+      const processedAttachments = await Promise.all(validAttachments.map(async (att) => {
+        let newAtt = { ...att };
+        
+        // If we only have the File object, convert it to base64 NOW
+        if (!newAtt.fileUri && !newAtt.data && newAtt.file) {
+          try {
+            const base64 = await fileToBase64(newAtt.file);
+            newAtt.data = base64;
+          } catch (e) {
+            console.error("Failed to convert file to base64 at finish time", e);
+          }
+        }
+        return newAtt;
+      }));
+      
+      const currentAttachmentsWithData = processedAttachments;
       let historyToKeep = currentMessages.slice(-10, -1);
       
       // Attempt to load base64 data for history images so the model doesn't lose context
@@ -1963,31 +2700,44 @@ export default function App() {
       }));
       
       const historyContents = historyToKeep.map((m) => {
+        const parts = [
+          ...(m.attachments?.flatMap(att => {
+            const attParts = [];
+            if (att.fileUri && att.type) {
+              attParts.push({
+                fileData: {
+                  fileUri: att.fileUri,
+                  mimeType: att.type
+                }
+              });
+            } else if (att.data && att.type && !att.type.includes('wordprocessingml.document')) {
+              attParts.push({
+                inlineData: {
+                  data: att.data,
+                  mimeType: att.type
+                }
+              });
+            }
+            const hasBinary = !!((att.fileUri && att.type) || (att.data && att.type && !att.type.includes('wordprocessingml.document')));
+            if (att.extractedText && (!hasBinary || !att.type.includes('pdf'))) {
+              attParts.push({
+                text: `[Reference Document Content - ${att.name}]:\n${att.extractedText}`
+              });
+            }
+            attParts.push({
+              text: `[Uploaded File: ${att.url || `attachment://${att.id}`}] (File Name: ${att.name})`
+            });
+            return attParts;
+          }) || []),
+          { text: m.text || (m.role === 'user' && m.attachments && m.attachments.length > 0 ? "（上传了文件）" : "") }
+        ].filter(p => {
+          const part = p as any;
+          return (part.text && part.text.trim().length > 0) || part.inlineData || part.fileData;
+        });
+
         return {
           role: m.role,
-          parts: [
-            ...(m.attachments?.flatMap(att => {
-              const parts = [];
-              if (att.data && att.type && !att.type.includes('wordprocessingml.document')) {
-                parts.push({
-                  inlineData: {
-                    data: att.data,
-                    mimeType: att.type
-                  }
-                });
-              }
-              if (att.extractedText) {
-                parts.push({
-                  text: `[Reference Document Content - ${att.name}]:\n${att.extractedText}`
-                });
-              }
-              parts.push({
-                text: `[Uploaded File: ${att.url || `attachment://${att.id}`}] (File Name: ${att.name})`
-              });
-              return parts;
-            }) || []),
-            { text: m.text || (m.role === 'user' && m.attachments && m.attachments.length > 0 ? "（上传了文件）" : "") }
-          ]
+          parts: parts.length > 0 ? parts : [{ text: "..." }] // Ensure at least one part
         };
       });
 
@@ -2041,35 +2791,48 @@ TASKS:
   "Review translations and ensure all formatting is correct."
 ]`;
 
-        const outlineContents = [
-          ...historyContents,
-          {
-            role: "user",
-            parts: [
-              ...(currentAttachmentsWithData.flatMap(att => {
-                const parts = [];
-                if (att.data && att.type && !att.type.includes('wordprocessingml.document')) {
-                  parts.push({
+      const outlineContents = [
+        ...historyContents,
+        {
+          role: "user",
+          parts: (function() {
+            const parts = [
+              ...(processedAttachments.flatMap(att => {
+                const attParts = [];
+                if (att.fileUri && att.type) {
+                  attParts.push({
+                    fileData: {
+                      fileUri: att.fileUri,
+                      mimeType: att.type
+                    }
+                  });
+                } else if (att.data && att.type && !att.type.includes('wordprocessingml.document')) {
+                  attParts.push({
                     inlineData: {
                       data: att.data!,
                       mimeType: att.type!
                     }
                   });
                 }
-                if (att.extractedText) {
-                  parts.push({
+                const hasBinary = !!((att.fileUri && att.type) || (att.data && att.type && !att.type.includes('wordprocessingml.document')));
+                if (att.extractedText && (!hasBinary || !att.type.includes('pdf'))) {
+                  attParts.push({
                     text: `[Reference Document Content - ${att.name}]:\n${att.extractedText}`
                   });
                 }
-                parts.push({
+                attParts.push({
                   text: `[Uploaded File: ${att.url || `attachment://${att.id}`}] (File Name: ${att.name})`
                 });
-                return parts;
+                return attParts;
               })),
-              { text: attachmentContextText + outlinePrompt }
-            ]
-          }
-        ];
+              { text: (attachmentContextText + outlinePrompt) || "Processing..." }
+            ].filter(p => p && ((p as any).text || (p as any).inlineData || (p as any).fileData));
+            return parts.length > 0 ? parts : [{ text: "Continue processing." }];
+          })()
+        }
+      ];
+
+      // No total size verification
 
         let outlineResponse;
         let outlineRetries = 0;
@@ -2124,12 +2887,19 @@ TASKS:
           }
           const match = rawText.match(/\[[\s\S]*\]/);
           if (match) {
-            rawText = match[0];
+            tasks = JSON.parse(match[0]);
+          } else {
+            const fallbackMatch = rawText.split(/TASKS:/i);
+            if (fallbackMatch.length > 1) {
+              const lines = fallbackMatch[1].split('\n').map(l => l.trim().replace(/^[-*0-9.]+\s*/, '')).filter(l => l.length > 0);
+              tasks = lines.length > 0 ? lines : [userRequestText];
+            } else {
+              tasks = [userRequestText];
+            }
           }
-          tasks = JSON.parse(rawText);
-          if (!Array.isArray(tasks)) tasks = [userRequestText];
+          if (!Array.isArray(tasks) || tasks.length === 0) tasks = [userRequestText];
         } catch (e) {
-          console.error("Failed to parse outline", e);
+          console.warn("Could not perfectly parse outline as JSON, falling back to single task.", e);
           tasks = [userRequestText];
         }
 
@@ -2175,29 +2945,40 @@ CRITICAL INSTRUCTIONS:
             ...historyContents,
             {
               role: "user",
-              parts: [
-                ...(currentAttachmentsWithData.flatMap(att => {
-                  const parts = [];
-                  if (att.data && att.type && !att.type.includes('wordprocessingml.document')) {
-                    parts.push({
-                      inlineData: {
-                        data: att.data!,
-                        mimeType: att.type!
-                      }
+              parts: (function() {
+                const parts = [
+                  ...(currentAttachmentsWithData.flatMap(att => {
+                    const attParts = [];
+                    if (att.fileUri && att.type) {
+                      attParts.push({
+                        fileData: {
+                          fileUri: att.fileUri,
+                          mimeType: att.type
+                        }
+                      });
+                    } else if (att.data && att.type && !att.type.includes('wordprocessingml.document')) {
+                      attParts.push({
+                        inlineData: {
+                          data: att.data!,
+                          mimeType: att.type!
+                        }
+                      });
+                    }
+                    const hasBinary = !!((att.fileUri && att.type) || (att.data && att.type && !att.type.includes('wordprocessingml.document')));
+                    if (att.extractedText && (!hasBinary || !att.type.includes('pdf'))) {
+                      attParts.push({
+                        text: `[Reference Document Content - ${att.name}]:\n${att.extractedText}`
+                      });
+                    }
+                    attParts.push({
+                      text: `[Uploaded File: ${att.url || `attachment://${att.id}`}] (File Name: ${att.name})`
                     });
-                  }
-                  if (att.extractedText) {
-                    parts.push({
-                      text: `[Reference Document Content - ${att.name}]:\n${att.extractedText}`
-                    });
-                  }
-                  parts.push({
-                    text: `[Uploaded File: ${att.url || `attachment://${att.id}`}] (File Name: ${att.name})`
-                  });
-                  return parts;
-                })),
-                { text: attachmentContextText + taskPrompt }
-              ]
+                    return attParts;
+                  })),
+                  { text: (attachmentContextText + taskPrompt) || "Executing task..." }
+                ].filter(p => p && ((p as any).text || (p as any).inlineData || (p as any).fileData));
+                return parts.length > 0 ? parts : [{ text: "Process as requested." }];
+              })()
             }
           ];
 
@@ -2297,31 +3078,44 @@ CRITICAL INSTRUCTIONS:
           ...historyContents,
           {
             role: "user",
-            parts: [
-              ...(currentAttachmentsWithData.flatMap(att => {
-                const parts = [];
-                if (att.data && att.type && !att.type.includes('wordprocessingml.document')) {
-                  parts.push({
-                    inlineData: {
-                      data: att.data!,
-                      mimeType: att.type!
-                    }
+            parts: (function() {
+              const parts = [
+                ...(currentAttachmentsWithData.flatMap(att => {
+                  const attParts = [];
+                  if (att.fileUri && att.type) {
+                    attParts.push({
+                      fileData: {
+                        fileUri: att.fileUri,
+                        mimeType: att.type
+                      }
+                    });
+                  } else if (att.data && att.type && !att.type.includes('wordprocessingml.document')) {
+                    attParts.push({
+                      inlineData: {
+                        data: att.data!,
+                        mimeType: att.type!
+                      }
+                    });
+                  }
+                  const hasBinary = !!((att.fileUri && att.type) || (att.data && att.type && !att.type.includes('wordprocessingml.document')));
+                  if (att.extractedText && (!hasBinary || !att.type.includes('pdf'))) {
+                    attParts.push({
+                      text: `[Reference Document Content - ${att.name}]:\n${att.extractedText}`
+                    });
+                  }
+                  attParts.push({
+                    text: `[Uploaded File: ${att.url || `attachment://${att.id}`}] (File Name: ${att.name})`
                   });
-                }
-                if (att.extractedText) {
-                  parts.push({
-                    text: `[Reference Document Content - ${att.name}]:\n${att.extractedText}`
-                  });
-                }
-                parts.push({
-                  text: `[Uploaded File: ${att.url || `attachment://${att.id}`}] (File Name: ${att.name})`
-                });
-                return parts;
-              })),
-              { text: attachmentContextText + contextPrompt }
-            ]
+                  return attParts;
+                })),
+                { text: (attachmentContextText + contextPrompt) || "Thinking..." }
+              ].filter(p => p && ((p as any).text || (p as any).inlineData || (p as any).fileData));
+              return parts.length > 0 ? parts : [{ text: "Process request." }];
+            })()
           }
         ];
+
+        // No total size verification
 
       let responseStream;
       let retries = 0;
@@ -2560,7 +3354,14 @@ CRITICAL INSTRUCTIONS:
       
       if (hasAttachments) {
         newTemplateData.attachments!.forEach(att => {
-          if (att.data && att.type) {
+          if (att.fileUri && att.type) {
+            parts.push({
+              fileData: {
+                fileUri: att.fileUri,
+                mimeType: att.type
+              }
+            });
+          } else if (att.data && att.type) {
             parts.push({
               inlineData: {
                 data: att.data,
@@ -2568,7 +3369,8 @@ CRITICAL INSTRUCTIONS:
                }
             });
           }
-          if (att.extractedText) {
+          const hasBinary = !!((att.fileUri && att.type) || (att.data && att.type && !att.type.includes('wordprocessingml.document')));
+          if (att.extractedText && (!hasBinary || !att.type.includes('pdf'))) {
             parts.push({
               text: `[Reference Document Content - ${att.name}]:\n${att.extractedText}`
             });
@@ -2981,6 +3783,7 @@ Return ONLY the suggested name text, no punctuation, no quotes. The language MUS
           const att = msg.attachments?.find(a => a.id === id);
           if (att?.url) return att.url;
           if (att?.previewUrl) return att.previewUrl;
+          if (att?.data && att?.type) return `data:${att.type};base64,${att.data}`;
         }
       }
       // Fallback if attachment not found
@@ -3017,6 +3820,8 @@ Return ONLY the suggested name text, no punctuation, no quotes. The language MUS
         let file: File | undefined;
         let url: string | undefined;
         let previewUrl: string | undefined;
+        let data: string | undefined;
+        let type: string | undefined;
         
         for (const session of sessions) {
           for (const msg of session.messages) {
@@ -3030,9 +3835,13 @@ Return ONLY the suggested name text, no punctuation, no quotes. The language MUS
             if (att?.previewUrl) {
               previewUrl = att.previewUrl;
             }
-            if (file || url || previewUrl) break;
+            if (att?.data && att?.type) {
+              data = att.data;
+              type = att.type;
+            }
+            if (file || url || previewUrl || data) break;
           }
-          if (file || url || previewUrl) break;
+          if (file || url || previewUrl || data) break;
         }
 
         if (file) {
@@ -3049,6 +3858,8 @@ Return ONLY the suggested name text, no punctuation, no quotes. The language MUS
             console.error("Failed to fetch blob url", e);
             finalSrc = generatePngPlaceholder(alt || "Image not found");
           }
+        } else if (data && type) {
+          finalSrc = `data:${type};base64,${data}`;
         } else {
            // Fallback if attachment not found
            finalSrc = generatePngPlaceholder(alt || "Image not found");
@@ -4081,15 +4892,21 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                       {msg.attachments && msg.attachments.length > 0 && (
                         <div className="flex flex-wrap gap-2 mb-2">
                           {msg.attachments.map((att, idx) => (
-                            <div key={idx} className="relative w-20 h-20 rounded-lg overflow-hidden border border-white/20 bg-black/20 flex items-center justify-center">
-                              {att.type.startsWith('image/') && att.previewUrl ? (
-                                <img src={att.previewUrl} alt={att.name} className="w-full h-full object-cover" />
-                              ) : (
-                                <div className="flex flex-col items-center justify-center p-1 text-[10px] text-center opacity-70">
-                                  <FileText size={20} className="mb-1" />
-                                  <span className="truncate w-full">{att.name}</span>
-                                </div>
+                            <div 
+                              key={idx} 
+                              className={cn(
+                                "flex items-center gap-2 border rounded-xl px-2.5 py-1.5 max-w-[200px] shadow-sm",
+                                darkMode ? "bg-[#25252d] border-white/5" : "bg-[#f5f5f5] border-transparent"
                               )}
+                            >
+                              <div className={cn("shrink-0", getFileIconColor(att.type, att.name))}>
+                                {att.type.startsWith('image/') && (att.previewUrl || att.url || att.data) ? (
+                                  <img src={att.previewUrl || att.url || `data:${att.type};base64,${att.data}`} alt={att.name} className="w-6 h-6 object-cover rounded-md" />
+                                ) : (
+                                  <FileIconForType type={att.type} name={att.name || ''} size={20} />
+                                )}
+                              </div>
+                              <span className="text-xs font-medium truncate opacity-90">{att.name}</span>
                             </div>
                           ))}
                         </div>
@@ -4285,6 +5102,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                 onDeleteTemplate={handleDeleteTemplate}
                 onEditTemplate={handleEditTemplate}
                 activeTemplate={activeTemplate}
+                showToast={showToast}
               />
             </div>
           </div>
@@ -5019,10 +5837,13 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                         accept=".docx,.txt,.md,image/*,.pdf" 
                         onChange={async (e) => {
                           setNewTemplateData(prev => ({ ...prev, error: undefined }));
-                          const file = e.target.files?.[0];
+                          let file = e.target.files?.[0];
                           if (!file) return;
                           
-                          if (file.size > 15 * 1024 * 1024 && !file.name.toLowerCase().endsWith('.docx') && !file.type.includes('wordprocessingml')) {
+                          if ((file.type === 'application/pdf' || file.name.endsWith('.pdf')) && file.size > 15 * 1024 * 1024) {
+                             setNewTemplateData(prev => ({ ...prev, error: lang === 'zh' ? 'PDF文件过大，请保持在 15MB 以内。' : 'PDF File is too large. Please keep it under 15MB.' }));
+                             return;
+                          } else if (file.size > 15 * 1024 * 1024 && !file.name.toLowerCase().endsWith('.docx') && !file.type.includes('wordprocessingml')) {
                             setNewTemplateData(prev => ({ ...prev, error: lang === 'zh' ? '文件过大，请保持在 15MB 以内。' : 'File is too large. Please keep it under 15MB.' }));
                             return;
                           }
@@ -5034,6 +5855,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                               reader.onload = () => {
                                 const base64 = (reader.result as string).split(',')[1];
                                 const newAttachment = {
+                                  id: Math.random().toString(36).substring(2, 15),
                                   name: file.name,
                                   type: file.type || (file.name.endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream'),
                                   data: base64
@@ -5053,7 +5875,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                             } else {
                               // Extract text for Docs/TXT/MD and add as attachment
                               let text = '';
-                              if (file.name.toLowerCase().endsWith('.docx') || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+                              if ((file.name.toLowerCase().endsWith('.docx') || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') && file.size < 5 * 1024 * 1024) {
                                 const parsed = await parseWordDoc(file);
                                 text = parsed.sections.map((s: any) => s.paragraphs.map((p: any) => {
                                   if (p.type === 'table') return '[Table]';
@@ -5067,6 +5889,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                               
                               if (text && text.trim()) {
                                 const newAttachment = {
+                                  id: Math.random().toString(36).substring(2, 15),
                                   name: file.name,
                                   type: file.type || 'text/plain',
                                   extractedText: text.trim()
@@ -5109,18 +5932,24 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                   {newTemplateData.attachments && newTemplateData.attachments.length > 0 && (
                     <div className="flex flex-wrap gap-2 mb-3">
                       {newTemplateData.attachments.map((att, idx) => (
-                        <div key={idx} className={cn("relative group flex items-center pr-8 overflow-hidden rounded-lg border", darkMode ? "bg-white/5 border-white/10" : "bg-black/5 border-gray-200")}>
-                          {att.type.startsWith('image/') ? (
-                            <img src={`data:${att.type};base64,${att.data}`} alt={att.name} className="w-10 h-10 object-cover border-r border-gray-500/20" />
-                          ) : (
-                            <div className={cn("w-10 h-10 flex items-center justify-center border-r border-gray-500/20", darkMode ? "bg-blue-500/10 text-blue-400" : "bg-blue-50 text-blue-500")}>
-                              <FileText size={18} />
-                            </div>
+                        <div 
+                          key={idx} 
+                          className={cn(
+                            "relative group flex items-center pr-8 pl-3 py-2 rounded-xl border max-w-[200px]",
+                            darkMode ? "bg-[#25252d] border-white/5" : "bg-[#f5f5f5] border-transparent"
                           )}
-                          <span className="text-sm font-medium truncate px-3 max-w-[150px]">{att.name}</span>
+                        >
+                          <div className={cn("shrink-0 mr-2", getFileIconColor(att.type, att.name))}>
+                            {att.type.startsWith('image/') ? (
+                              <img src={`data:${att.type};base64,${att.data}`} alt={att.name} className="w-5 h-5 object-cover rounded" />
+                            ) : (
+                              <FileIconForType type={att.type} name={att.name || ''} size={18} />
+                            )}
+                          </div>
+                          <span className="text-sm font-medium truncate opacity-90">{att.name}</span>
                           <button
                             onClick={() => setNewTemplateData(prev => ({ ...prev, attachments: prev.attachments?.filter((_, i) => i !== idx) }))}
-                            className="absolute right-1 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500 p-1.5 rounded-md hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+                            className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-red-500 p-1 rounded-full hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
                           >
                             <X size={14} />
                           </button>
@@ -5189,6 +6018,28 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                 </div>
               </div>
             </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Global Toast */}
+      <AnimatePresence>
+        {toastMessage && (
+          <motion.div
+            initial={{ opacity: 0, y: 20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 10, scale: 0.95 }}
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[9999]"
+          >
+            <div className={cn(
+              "px-5 py-3 rounded-2xl shadow-2xl backdrop-blur-xl border font-bold text-sm tracking-wide flex items-center gap-2",
+              darkMode 
+                ? "bg-[#25252d]/90 border-white/10 text-white shadow-[0_8px_32px_rgba(0,0,0,0.5)]" 
+                : "bg-white/90 border-black/5 text-gray-800 shadow-[0_8px_32px_rgba(0,0,0,0.15)]"
+            )}>
+              <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+              {toastMessage}
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
