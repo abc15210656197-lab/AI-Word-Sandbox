@@ -59,7 +59,10 @@ import {
   ImageIcon,
   FileSpreadsheet,
   Presentation,
-  Cloud
+  Cloud,
+  FolderOpen,
+  Folder,
+  Search
 } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkMath from "remark-math";
@@ -505,6 +508,24 @@ Run 结构属性：text, isBold, isItalic, color。
 
 注意：如果用户没有要求特定颜色，请在 JSON 中省略 "color" 属性。预览时文档背景始终为白色，文字默认为黑色。`;
 
+const getDynamicSystemInstruction = () => {
+  const now = new Date();
+  const localDateStr = now.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
+  const localTimeStr = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+  return `${SYSTEM_INSTRUCTION}
+
+### 当前系统物理时间 (物理世界绝对正确时间)
+- 当前本地日期: ${localDateStr}
+- 当前本地时间: ${localTimeStr}
+- 用户端所处时区: ${timeZone}
+- 协作系统UTC时间: ${now.toISOString()}
+- 当前年份: ${now.getFullYear()}年
+
+当用户提示词提及“当前日期”、“当前时间”、“今天”、“今日”、“现在”或有明确落款年份/日期需求时，请**务必**直接使用上述真实的北京/本地时间进行处理、计算和填充，绝对不能以您的训练数据截止旧时间或任何虚假假设时间为准！`;
+};
+
 function ModelSelector({ 
   selected, 
   onChange, 
@@ -539,7 +560,7 @@ function ModelSelector({
   const t = translations[lang];
   const models = [
     { id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro", icon: "✨", desc: "Best for complex reasoning & logic" },
-    { id: "gemini-3-flash-preview", name: "Gemini 3 Flash", icon: "⚡", desc: "Fast and versatile for most tasks" },
+    { id: "gemini-3.5-flash", name: "Gemini 3.5 Flash", icon: "⚡", desc: "Fast and versatile for most tasks" },
     { id: "gemini-3.1-flash-lite-preview", name: "Gemini 3.1 Flashlite", icon: "🚀", desc: "Ultra-fast for simple tasks" }
   ];
   const selectedModel = models.find(m => m.id === selected) || models[0];
@@ -820,15 +841,42 @@ const ChatInputArea = React.memo(({
   const [splittingProgress, setSplittingProgress] = useState(0);
   
   // Google Drive state
-  const [pickerApiLoaded, setPickerApiLoaded] = useState(false);
   const [googleTokens, setGoogleTokens] = useState<any>(() => {
     try { return JSON.parse(localStorage.getItem('googleTokens') || 'null'); } catch { return null; }
   });
   
+  const [showDriveModal, setShowDriveModal] = useState(false);
+  const [driveFiles, setDriveFiles] = useState<any[]>([]);
+  const [isDriveLoading, setIsDriveLoading] = useState(false);
+  const [driveQuery, setDriveQuery] = useState("");
+  
+  // Navigation & selection
+  const [folderStack, setFolderStack] = useState<{id: string, name: string}[]>([{id: "root", name: "Drive"}]);
+  const currentFolderId = folderStack[folderStack.length - 1].id;
+  const [selectedDriveFiles, setSelectedDriveFiles] = useState<any[]>([]);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const processFiles = async (files: File[]) => {
     if (files.length === 0) return;
+
+    // Check file sizes before processing to prevent browser OOM and crashes
+    const allowedFiles: File[] = [];
+    for (const f of files) {
+      const maxMb = 60; // 60MB limit
+      const maxBytes = maxMb * 1024 * 1024;
+      if (f.size > maxBytes) {
+        const sizeMb = (f.size / 1024 / 1024).toFixed(1);
+        showToast(
+          lang === 'zh' 
+            ? `文件过大: "${f.name}" (${sizeMb}MB)。为防止内存溢出导致浏览器崩溃，最大限制为 ${maxMb}MB，请将文档拆分或压缩后重新上传。`
+            : `File too large: "${f.name}" (${sizeMb}MB). To prevent browser out-of-memory crashes, files are limited to ${maxMb}MB. Please split or compress and retry.`
+        );
+        continue;
+      }
+      allowedFiles.push(f);
+    }
+    if (allowedFiles.length === 0) return;
 
     // We will hold all final files/chunks here
     const finalAttachments: any[] = [];
@@ -849,7 +897,7 @@ const ChatInputArea = React.memo(({
       uploadTasks.push({ id, file: f });
     };
 
-    const hasLargePdf = files.some(f => (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) && f.size > 15 * 1024 * 1024);
+    const hasLargePdf = allowedFiles.some(f => (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) && f.size > 15 * 1024 * 1024);
     if (hasLargePdf) {
       setIsSplitting(true);
       showToast(lang === 'zh' ? '检测到大文件，已自动开启安全拆分传输' : 'Large file detected, starting secure split transfer...');
@@ -869,7 +917,7 @@ const ChatInputArea = React.memo(({
     const apiKey = (process.env.GEMINI_API_KEY || (import.meta as any).env?.VITE_GEMINI_API_KEY || "").trim();
     const hasValidKey = apiKey && !isPlaceholderKey(apiKey);
 
-    for (const f of files) {
+    for (const f of allowedFiles) {
       if ((f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) && f.size > 15 * 1024 * 1024) {
         try {
           setIsSplitting(true);
@@ -955,30 +1003,20 @@ const ChatInputArea = React.memo(({
   };
 
   // Google Drive Integration
-  useEffect(() => {
-    const script = document.createElement('script');
-    script.src = 'https://apis.google.com/js/api.js';
-    script.onload = () => {
-      (window as any).gapi.load('picker', () => {
-        setPickerApiLoaded(true);
-      });
-    };
-    document.body.appendChild(script);
-  }, []);
+  // Removed gapi picker loading as we use custom UI
 
   useEffect(() => {
-    const handleMessage = (event: MessageEvent) => {
+  const handleMessage = (event: MessageEvent) => {
       if (event.data?.type === 'GOOGLE_OAUTH_SUCCESS') {
         const tokens = event.data.tokens;
         setGoogleTokens(tokens);
         localStorage.setItem('googleTokens', JSON.stringify(tokens));
         showToast(lang === 'zh' ? 'Google账户连接成功' : 'Google account linked');
-        showPicker(tokens);
       }
     };
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [lang, pickerApiLoaded]);
+  }, [lang]);
 
   const connectGoogleDrive = async () => {
     try {
@@ -993,56 +1031,40 @@ const ChatInputArea = React.memo(({
     }
   };
 
-  const showPicker = (tokens: any) => {
-    const apiKey = import.meta.env.VITE_GOOGLE_API_KEY;
-    if (!apiKey) {
-      showToast(lang === 'zh' ? '请在左侧“设置”菜单中配置 VITE_GOOGLE_API_KEY，并在 Google Cloud 启用 Google Picker API' : 'Please configure VITE_GOOGLE_API_KEY in Settings and enable Google Picker API');
-      return;
-    }
-    
-    if (!pickerApiLoaded || !(window as any).google?.picker) {
-      showToast(lang === 'zh' ? 'Google 选择器正在加载，请稍后重试' : 'Google Picker is initializing, please try again');
-      return;
-    }
-
+  const fetchDriveFiles = async (folderId?: string, query?: string) => {
+    if (!googleTokens) return;
+    setIsDriveLoading(true);
     try {
-      const view = new (window as any).google.picker.DocsView((window as any).google.picker.ViewId.DOCS)
-        .setIncludeFolders(true)
-        .setSelectFolderEnabled(false);
-
-      // 强制使用完整 Origin，包含端口（如果有）
-      const origin = window.location.origin;
-
-      const picker = new (window as any).google.picker.PickerBuilder()
-        .addView(view)
-        .setOAuthToken(tokens.access_token)
-        .setDeveloperKey(apiKey)
-        .setOrigin(origin)
-        .setCallback((data: any) => {
-          if (data.action === (window as any).google.picker.Action.PICKED) {
-            const file = data.docs[0];
-            addFromDrive(file.id, file.name, file.mimeType);
-          }
-        })
-        .build();
-      
-      picker.setVisible(true);
-      
-      // 添加提示：如果用户在 iFrame 中看到的依然是白屏
-      setTimeout(() => {
-        showToast(lang === 'zh' ? '如果看到白屏，请点击右上角“在新页签中打开”' : 'If you see a white screen, please click "Open in New Tab"');
-      }, 2000);
-
+      const res = await fetch('/api/drive/list', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tokens: googleTokens, folderId, query })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setDriveFiles(data.files || []);
+      } else {
+        const err = await res.json();
+        if (res.status === 401 || err.error?.includes('invalid_grant')) {
+          setGoogleTokens(null);
+          localStorage.removeItem('googleTokens');
+          showToast(lang === 'zh' ? 'Google 授权已过期，请重新连接' : 'Google auth expired, please reconnect');
+        } else {
+          showToast(lang === 'zh' ? '获取 Google Drive 文件失败' : 'Failed to fetch Drive files');
+        }
+      }
     } catch (e) {
-      console.error('Picker error:', e);
-      showToast(lang === 'zh' ? '启动选择器失败，请检查是否在 Cloud Console 中启用了 Google Picker API' : 'Failed to launch picker, please check if Google Picker API is enabled in Cloud Console');
+      console.error(e);
+      showToast(lang === 'zh' ? '获取 Google Drive 文件失败' : 'Failed to fetch Drive files');
+    } finally {
+      setIsDriveLoading(false);
     }
   };
 
   const handleOpenDrive = () => {
     if (googleTokens?.access_token) {
-      showToast(lang === 'zh' ? '正在加载 Google Drive...' : 'Opening Google Drive...');
-      showPicker(googleTokens);
+      setShowDriveModal(true);
+      fetchDriveFiles(currentFolderId);
     } else {
       showToast(lang === 'zh' ? '正在跳转授权...' : 'Redirecting to auth...');
       connectGoogleDrive();
@@ -1059,14 +1081,34 @@ const ChatInputArea = React.memo(({
         body: JSON.stringify({ tokens: googleTokens, fileId })
       });
       
-      if (!res.ok) throw new Error("Download failed");
-      const blob = await res.blob();
-      const file = new File([blob], fileName, { type: mimeType });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "Download failed");
+      }
+
+      // Determine proper filename and type from response headers
+      const contentType = res.headers.get('Content-Type') || mimeType;
+      const contentDisposition = res.headers.get('Content-Disposition');
+      let finalFileName = fileName;
       
+      if (contentDisposition) {
+        const utf8Match = contentDisposition.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+        if (utf8Match) {
+          finalFileName = decodeURIComponent(utf8Match[1]);
+        } else {
+          const match = contentDisposition.match(/filename="?([^";]+)"?/);
+          if (match) finalFileName = decodeURIComponent(match[1]);
+        }
+      }
+
+      const blob = await res.blob();
+      const file = new File([blob], finalFileName, { type: contentType });
+      
+      // Use the standard processFiles pipeline which handles splitting and chunking
       processFiles([file]);
     } catch (e) {
       console.error(e);
-      showToast(lang === 'zh' ? "下载文件失败" : "Failed to download file");
+      showToast(lang === 'zh' ? `处理 ${fileName} 失败: ${e instanceof Error ? e.message : '未知错误'}` : `Failed to process ${fileName}: ${e instanceof Error ? e.message : 'Unknown error'}`);
     }
   };
 
@@ -1116,7 +1158,8 @@ const ChatInputArea = React.memo(({
     >
       {/* Seamless Progressive Gradient Blur Background */}
       <div className={cn(
-        "absolute -top-6 inset-x-0 bottom-0 -z-10 pointer-events-none transition-opacity duration-300",
+        "absolute inset-x-0 bottom-0 -z-10 pointer-events-none transition-all duration-300",
+        (attachments.length > 0 || isSplitting) ? "top-[112px]" : "-top-6",
         !isInputExpanded ? "opacity-100" : "opacity-0"
       )}>
         {/* Single Blur Layer to prevent GPU flashing */}
@@ -1192,141 +1235,139 @@ const ChatInputArea = React.memo(({
             )} />
 
             <div className="flex flex-nowrap items-center gap-3 overflow-x-auto pb-4 px-4 no-scrollbar scroll-smooth">
-              {attachments.map((att, idx) => (
-                <motion.div 
-                  layout
-                  initial={{ opacity: 0, scale: 0.9, x: 20 }}
-                  animate={{ opacity: 1, scale: 1, x: 0 }}
-                  exit={{ opacity: 0, scale: 0.8, x: -20 }}
-                  key={att.id || idx} 
-                  className={cn(
-                    "relative group shrink-0 overflow-hidden rounded-2xl border flex flex-col w-[200px] transition-all duration-300",
-                    darkMode 
-                      ? "bg-[#25252d]/40 border-white/10 hover:border-blue-500/30 hover:bg-[#2a2a35]/60 shadow-[0_8px_30px_rgba(0,0,0,0.4)] backdrop-blur-md" 
-                      : "bg-white border-gray-100 hover:border-blue-400/30 hover:shadow-xl shadow-md"
-                  )}
-                >
-                  {/* Subtle Top-edge Progress Bar */}
-                  {typeof att.progress === 'number' && att.progress < 100 && att.progress >= 0 && (
-                    <div className="absolute top-0 left-0 right-0 h-[3px] bg-gray-500/10 z-20">
-                      <motion.div 
-                        className="h-full bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 shadow-[0_0_10px_rgba(59,130,246,0.6)]"
-                        initial={{ width: 0 }}
-                        animate={{ width: `${Math.max(0, Math.min(100, att.progress))}%` }}
-                        transition={{ duration: 0.4, ease: "circOut" }}
-                      />
-                    </div>
-                  )}
-
-                  {/* Delete Button */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setAttachments(prev => prev.filter(a => a.id !== att.id));
-                    }}
+              <AnimatePresence mode="popLayout">
+                {attachments.map((att) => (
+                  <motion.div 
+                    layout="position"
+                    initial={{ opacity: 0, scale: 0.9, x: 20 }}
+                    animate={{ opacity: 1, scale: 1, x: 0 }}
+                    exit={{ opacity: 0, scale: 0.8, x: -20 }}
+                    key={att.id} 
                     className={cn(
-                      "absolute top-2 right-2 p-1.5 rounded-full opacity-0 group-hover:opacity-100 transition-all z-30",
-                      darkMode ? "bg-black/40 hover:bg-red-500/80 text-white shadow-xl" : "bg-white/80 hover:bg-red-500 text-gray-700 hover:text-white shadow-sm"
+                      "relative group shrink-0 overflow-hidden rounded-2xl border flex flex-col w-[200px] transition-all duration-300",
+                      darkMode 
+                        ? "bg-[#25252d]/40 border-white/10 hover:border-blue-500/30 hover:bg-[#2a2a35]/60 shadow-[0_8px_30px_rgba(0,0,0,0.4)] backdrop-blur-md" 
+                        : "bg-white border-gray-100 hover:border-blue-400/30 hover:shadow-xl shadow-md"
                     )}
                   >
-                    <X size={14} strokeWidth={2.5} />
-                  </button>
+                    {/* Background Progress Bar covering entire card */}
+                    {typeof att.progress === 'number' && att.progress < 100 && att.progress >= 0 && (
+                      <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden rounded-2xl">
+                        <motion.div 
+                          className={cn(
+                            "absolute top-0 bottom-0 left-0 bg-gradient-to-r",
+                            darkMode 
+                              ? "from-blue-500/15 via-indigo-500/15 to-purple-500/15 border-r border-blue-500/30" 
+                              : "from-blue-500/10 via-indigo-500/10 to-purple-500/10 border-r border-blue-400/20"
+                          )}
+                          initial={{ width: 0 }}
+                          animate={{ width: `${Math.max(0, Math.min(100, att.progress))}%` }}
+                          transition={{ duration: 0.6, ease: "easeOut" }}
+                        />
+                      </div>
+                    )}
 
-                  <div className="p-4 flex items-center gap-4">
-                    {/* Visual Asset Container */}
-                    <div className="shrink-0 relative">
-                      {att.type.startsWith('image/') && att.previewUrl ? (
-                        <div className="w-12 h-12 rounded-xl overflow-hidden border border-white/5 shadow-2xl transition-transform duration-500 group-hover:scale-110">
-                          <img src={att.previewUrl} alt={att.name} className="w-full h-full object-cover" />
-                        </div>
-                      ) : (
-                        <div className={cn(
-                          "w-12 h-12 flex items-center justify-center rounded-2xl bg-gradient-to-br transition-all duration-500 group-hover:scale-110 shadow-lg", 
-                          darkMode ? "from-white/[0.08] to-transparent" : "from-black/[0.05] to-transparent",
-                          getFileIconColor(att.type, att.name)
-                        )}>
-                          <FileIconForType type={att.type} name={att.name || ''} size={28} />
-                        </div>
+                    {/* Delete Button */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setAttachments(prev => prev.filter(a => a.id !== att.id));
+                      }}
+                      className={cn(
+                        "absolute top-2 right-2 p-1.5 rounded-full opacity-0 group-hover:opacity-100 transition-all z-30",
+                        darkMode ? "bg-black/40 hover:bg-red-500/80 text-white shadow-xl" : "bg-white/80 hover:bg-red-500 text-gray-700 hover:text-white shadow-sm"
                       )}
-                    </div>
-
-                    {/* Metadata */}
-                    <div className="flex flex-col min-w-0 flex-1">
-                      <span className={cn(
-                        "text-[14px] font-bold truncate leading-none mb-2", 
-                        darkMode ? "text-gray-100" : "text-gray-800"
-                      )}>
-                        {att.name}
-                      </span>
-                      <div className="flex flex-col gap-1">
-                        {typeof att.progress === 'number' && att.progress < 100 && att.progress >= 0 ? (
-                          <div className="flex items-center gap-2">
-                             <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse shadow-[0_0_5px_rgba(59,130,246,0.8)]" />
-                             <span className="text-[11px] font-black text-blue-400 font-mono tracking-tighter">
-                                {Math.round(att.progress)}%
-                             </span>
-                          </div>
-                        ) : att.progress === -1 ? (
-                          <div className="flex flex-col gap-0.5">
-                            <span className="text-[11px] text-rose-500 font-black flex items-center gap-1.5 bg-rose-500/10 px-2 py-0.5 rounded-full w-fit">
-                              <AlertCircle size={10} /> {lang === 'zh' ? '失败' : 'Failed'}
-                            </span>
-                            {(att as any).errorMsg && (
-                              <span className="text-[9px] text-rose-400 capitalize truncate max-w-[150px] px-1">
-                                {(att as any).errorMsg}
-                              </span>
-                            )}
+                    >
+                      <X size={14} strokeWidth={2.5} />
+                    </button>
+  
+                    <div className="p-4 flex items-center gap-4 relative z-10">
+                      {/* Visual Asset Container */}
+                      <div className="shrink-0 relative">
+                        {att.type.startsWith('image/') && att.previewUrl ? (
+                          <div className="w-12 h-12 rounded-xl overflow-hidden border border-white/5 shadow-2xl transition-transform duration-500 group-hover:scale-110">
+                            <img src={att.previewUrl} alt={att.name} className="w-full h-full object-cover" />
                           </div>
                         ) : (
-                          <span className={cn(
-                            "text-[11px] font-black uppercase tracking-[0.1em] opacity-40 px-2 py-0.5 bg-gray-500/5 rounded-full w-fit", 
-                            darkMode ? "text-gray-300" : "text-gray-600"
+                          <div className={cn(
+                            "w-12 h-12 flex items-center justify-center rounded-2xl transition-all duration-500 group-hover:scale-110", 
+                            getFileProgressBgColor(att.type, att.name),
+                            getFileIconColor(att.type, att.name)
                           )}>
-                            {att.size ? `${(att.size / 1024 / 1024).toFixed(1)}MB` : (att.file ? `${(att.file.size / 1024 / 1024).toFixed(1)}MB` : (lang === 'zh' ? '已就绪' : 'Ready'))}
-                          </span>
+                            <FileIconForType type={att.type} name={att.name || ''} size={28} />
+                          </div>
                         )}
                       </div>
+  
+                      {/* Metadata */}
+                      <div className="flex flex-col min-w-0 flex-1">
+                        <span className={cn(
+                          "text-[14px] font-bold truncate leading-none mb-2", 
+                          darkMode ? "text-gray-100" : "text-gray-800"
+                        )}>
+                          {att.name}
+                        </span>
+                        <div className="flex flex-col gap-1">
+                          {typeof att.progress === 'number' && att.progress < 100 && att.progress >= 0 ? (
+                            <div className="flex items-center gap-2">
+                               <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse shadow-[0_0_5px_rgba(59,130,246,0.8)]" />
+                               <span className="text-[11px] font-black text-blue-400 font-mono tracking-tighter">
+                                  {Math.round(att.progress)}%
+                               </span>
+                            </div>
+                          ) : att.progress === -1 ? (
+                            <div className="flex flex-col gap-0.5">
+                              <span className="text-[11px] text-rose-500 font-black flex items-center gap-1.5 bg-rose-500/10 px-2 py-0.5 rounded-full w-fit">
+                                <AlertCircle size={10} /> {lang === 'zh' ? '失败' : 'Failed'}
+                              </span>
+                              {(att as any).errorMsg && (
+                                <span className="text-[9px] text-rose-400 capitalize truncate max-w-[150px] px-1">
+                                  {(att as any).errorMsg}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className={cn(
+                              "text-[11px] font-black uppercase tracking-[0.1em] opacity-40 px-2 py-0.5 bg-gray-500/5 rounded-full w-fit", 
+                              darkMode ? "text-gray-300" : "text-gray-600"
+                            )}>
+                              {att.size ? `${(att.size / 1024 / 1024).toFixed(1)}MB` : (att.file ? `${(att.file.size / 1024 / 1024).toFixed(1)}MB` : (lang === 'zh' ? '已就绪' : 'Ready'))}
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-
-                  {/* Remove button */}
-                  <button
-                    onClick={() => removeAttachment(idx)}
+                  </motion.div>
+                ))}
+  
+                {isSplitting && (
+                   <motion.div
+                    key="splitting-indicator"
+                    initial={{ opacity: 0, scale: 0.9, y: 10 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.9, y: 10 }}
                     className={cn(
-                      "absolute top-3 right-3 p-1.5 rounded-full transition-all duration-300 z-30",
-                      "opacity-0 group-hover:opacity-100 backdrop-blur-md",
-                      darkMode 
-                        ? "bg-white/5 hover:bg-rose-500/30 text-gray-400 hover:text-white" 
-                        : "bg-black/5 hover:bg-rose-500/20 text-gray-500 hover:text-rose-600"
-                    )}
-                  >
-                    <X size={14} />
-                  </button>
-                </motion.div>
-              ))}
-
-              {isSplitting && (
-                 <motion.div
-                  initial={{ opacity: 0, scale: 0.9, y: 10 }}
-                  animate={{ opacity: 1, scale: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.9, y: 10 }}
-                  className={cn(
-                    "flex-shrink-0 flex group overflow-hidden w-[200px] h-[72px] items-center justify-center",
+                      "flex-shrink-0 flex group overflow-hidden w-[200px] h-[72px] items-center justify-center",
                     "border backdrop-blur-xl rounded-2xl relative shadow-sm border-dashed",
                     "transition-all duration-300",
                     darkMode ? "bg-[#18181b]/50 border-white/10" : "bg-white/50 border-black/10"
                   )}
                  >
-                    {/* Top progress bar for splitting */}
-                    <div className="absolute top-0 left-0 right-0 h-[3px] bg-gray-500/10 z-20">
+                    {/* Background Progress Bar covering entire card for splitting */}
+                    <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden rounded-2xl">
                       <motion.div 
-                        className="h-full bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 shadow-[0_0_10px_rgba(59,130,246,0.6)]"
+                        className={cn(
+                          "absolute top-0 bottom-0 left-0 bg-gradient-to-r",
+                          darkMode 
+                            ? "from-blue-500/15 via-indigo-500/15 to-purple-500/15 border-r border-blue-500/30" 
+                            : "from-blue-500/10 via-indigo-500/10 to-purple-500/10 border-r border-blue-400/20"
+                        )}
                         initial={{ width: 0 }}
                         animate={{ width: `${Math.max(0, Math.min(100, splittingProgress))}%` }}
-                        transition={{ duration: 0.2, ease: "linear" }}
+                        transition={{ duration: 0.4, ease: "easeOut" }}
                       />
                     </div>
-                    <div className="flex flex-col justify-center items-center gap-2">
+                    <div className="flex flex-col justify-center items-center gap-2 relative z-10">
                        <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
                        <span className={cn("text-xs font-medium", darkMode ? "text-gray-300" : "text-gray-600")}>
                           {lang === 'zh' ? '正在处理文件...' : 'Processing file...'} {splittingProgress > 0 ? `${splittingProgress}%` : ''}
@@ -1334,6 +1375,7 @@ const ChatInputArea = React.memo(({
                     </div>
                  </motion.div>
               )}
+              </AnimatePresence>
             </div>
           </div>
         )}
@@ -1465,6 +1507,235 @@ const ChatInputArea = React.memo(({
           </div>
         </div>
       </div>
+
+      <AnimatePresence>
+        {showDriveModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className={cn(
+                "w-full max-w-4xl max-h-[85vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden",
+                darkMode ? "bg-gray-900 border border-white/10" : "bg-white border border-gray-200"
+              )}
+            >
+              {/* Header */}
+              <div className={cn(
+                "px-6 py-4 border-b flex items-center justify-between z-10 sticky top-0",
+                darkMode ? "border-white/10 bg-gray-900/95 backdrop-blur-sm" : "border-gray-200 bg-white/95 backdrop-blur-sm"
+              )}>
+                <div className="flex items-center gap-3">
+                  <Cloud className={darkMode ? "text-blue-400" : "text-blue-600"} size={24} />
+                  <h3 className={cn("text-lg font-semibold", darkMode ? "text-white" : "text-gray-900")}>
+                    {lang === 'zh' ? '从 Google Drive 选择' : 'Select from Google Drive'}
+                  </h3>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      setGoogleTokens(null);
+                      localStorage.removeItem('googleTokens');
+                      setShowDriveModal(false);
+                      showToast(lang === 'zh' ? '已断开 Google 账号' : 'Google account disconnected');
+                    }}
+                    className={cn(
+                      "text-xs px-3 py-1.5 rounded-full border transition-colors",
+                      darkMode ? "border-white/10 text-gray-400 hover:text-white hover:bg-white/5" : "border-gray-200 text-gray-500 hover:text-gray-900 hover:bg-gray-50"
+                    )}
+                  >
+                    {lang === 'zh' ? '清除授权' : 'Clear Auth'}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowDriveModal(false);
+                      setSelectedDriveFiles([]);
+                    }}
+                    className={cn(
+                      "p-2 rounded-full transition-colors",
+                      darkMode ? "hover:bg-white/10 text-gray-400" : "hover:bg-gray-100 text-gray-500"
+                    )}
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Toolbar */}
+              <div className={cn(
+                "px-6 py-3 border-b flex items-center gap-4",
+                darkMode ? "border-white/10 bg-gray-800/50" : "border-gray-100 bg-gray-50"
+              )}>
+                <div className="flex items-center gap-2">
+                  <button
+                    disabled={folderStack.length <= 1 || isDriveLoading}
+                    onClick={() => {
+                      const newStack = [...folderStack];
+                      newStack.pop();
+                      setFolderStack(newStack);
+                      fetchDriveFiles(newStack[newStack.length - 1].id, driveQuery);
+                    }}
+                    className={cn(
+                      "p-1.5 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
+                      darkMode ? "hover:bg-gray-700 text-gray-300" : "hover:bg-gray-200 text-gray-700"
+                    )}
+                  >
+                    <ChevronLeft size={18} />
+                  </button>
+                  <span className={cn("text-sm font-medium", darkMode ? "text-gray-300" : "text-gray-700")}>
+                    {folderStack[folderStack.length - 1].name}
+                  </span>
+                </div>
+                
+                <div className="flex-1" />
+                
+                <div className={cn(
+                  "flex items-center gap-2 px-3 py-1.5 rounded-lg border focus-within:ring-2 focus-within:ring-blue-500/50 transition-all",
+                  darkMode ? "bg-gray-900 border-white/10" : "bg-white border-gray-200"
+                )}>
+                  <Search size={16} className={darkMode ? "text-gray-500" : "text-gray-400"} />
+                  <input
+                    type="text"
+                    value={driveQuery}
+                    onChange={(e) => setDriveQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        fetchDriveFiles(currentFolderId, driveQuery);
+                      }
+                    }}
+                    placeholder={lang === 'zh' ? "搜索..." : "Search..."}
+                    className="bg-transparent border-none outline-none text-sm w-48"
+                  />
+                  {driveQuery && (
+                    <button onClick={() => {
+                      setDriveQuery("");
+                      fetchDriveFiles(currentFolderId, "");
+                    }}>
+                      <X size={14} className={darkMode ? "text-gray-500" : "text-gray-400"} />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* File List */}
+              <div className="flex-1 overflow-y-auto p-4 min-h-[400px] relative">
+                {isDriveLoading ? (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+                    <Loader2 className="animate-spin text-blue-500" size={32} />
+                    <span className={cn("text-sm", darkMode ? "text-gray-400" : "text-gray-500")}>
+                      {lang === 'zh' ? '正在加载...' : 'Loading...'}
+                    </span>
+                  </div>
+                ) : driveFiles.length === 0 ? (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+                    <div className={cn("p-4 rounded-full", darkMode ? "bg-gray-800" : "bg-gray-100")}>
+                      <FolderOpen className={darkMode ? "text-gray-600" : "text-gray-400"} size={48} />
+                    </div>
+                    <span className={cn("text-sm font-medium", darkMode ? "text-gray-400" : "text-gray-500")}>
+                      {lang === 'zh' ? '此文件夹为空' : 'This folder is empty'}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                    {driveFiles.map((file) => {
+                      const isFolder = file.mimeType === 'application/vnd.google-apps.folder';
+                      const isSelected = selectedDriveFiles.some(f => f.id === file.id);
+                      
+                      return (
+                        <div
+                          key={file.id}
+                          onClick={() => {
+                            if (isFolder) {
+                              setFolderStack([...folderStack, { id: file.id, name: file.name }]);
+                              fetchDriveFiles(file.id, driveQuery);
+                            } else {
+                              if (isSelected) {
+                                setSelectedDriveFiles(prev => prev.filter(f => f.id !== file.id));
+                              } else {
+                                setSelectedDriveFiles(prev => [...prev, file]);
+                              }
+                            }
+                          }}
+                          className={cn(
+                            "group cursor-pointer rounded-xl border p-3 flex flex-col items-center gap-3 transition-all relative overflow-hidden",
+                            darkMode ? "border-white/5 hover:bg-white/5" : "border-gray-100 hover:bg-gray-50 hover:border-gray-200 hover:shadow-sm",
+                            isSelected && (darkMode ? "border-blue-500 bg-blue-500/10 hover:bg-blue-500/20" : "border-blue-500 bg-blue-50 hover:bg-blue-100")
+                          )}
+                        >
+                          <div className={cn(
+                            "w-full aspect-square rounded-lg flex items-center justify-center overflow-hidden",
+                            darkMode ? "bg-gray-800" : "bg-gray-100"
+                          )}>
+                            {file.thumbnailLink ? (
+                              <img src={file.thumbnailLink} alt={file.name} className="w-full h-full object-cover" />
+                            ) : isFolder ? (
+                              <Folder className="text-blue-500" size={48} />
+                            ) : (
+                              <FileIconForType type={file.mimeType} name={file.name} size={48} />
+                            )}
+                          </div>
+                          
+                          <div className="w-full text-center">
+                            <h4 className={cn(
+                              "text-sm font-medium truncate",
+                              darkMode ? "text-gray-200" : "text-gray-700"
+                            )} title={file.name}>
+                              {file.name}
+                            </h4>
+                          </div>
+
+                          {(!isFolder && isSelected) && (
+                            <div className="absolute top-2 right-2 w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center text-white shadow-md">
+                              <Check size={14} strokeWidth={3} />
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className={cn(
+                "px-6 py-4 border-t flex justify-between items-center",
+                darkMode ? "border-white/10 bg-gray-900" : "border-gray-200 bg-white"
+              )}>
+                <span className={cn("text-sm", darkMode ? "text-gray-400" : "text-gray-500")}>
+                  {selectedDriveFiles.length > 0 
+                    ? (lang === 'zh' ? `已选择 ${selectedDriveFiles.length} 个文件` : `${selectedDriveFiles.length} file(s) selected`)
+                    : (lang === 'zh' ? '点击文件选择，点击文件夹进入' : 'Click file to select, folder to enter')}
+                </span>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setShowDriveModal(false)}
+                    className={cn(
+                      "px-5 py-2.5 rounded-xl font-medium transition-colors",
+                      darkMode ? "text-white bg-gray-800 hover:bg-gray-700" : "text-gray-700 bg-gray-100 hover:bg-gray-200"
+                    )}
+                  >
+                    {lang === 'zh' ? '取消' : 'Cancel'}
+                  </button>
+                  <button
+                    disabled={selectedDriveFiles.length === 0}
+                    onClick={() => {
+                      selectedDriveFiles.forEach(file => {
+                        addFromDrive(file.id, file.name, file.mimeType);
+                      });
+                      setShowDriveModal(false);
+                      setSelectedDriveFiles([]);
+                    }}
+                    className="px-5 py-2.5 rounded-xl font-medium text-white bg-blue-600 hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-sm"
+                  >
+                    <Check size={18} />
+                    {lang === 'zh' ? '添加' : 'Add'}
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 });
@@ -1492,7 +1763,7 @@ export const fileToBase64 = (file: File): Promise<string> => {
 export const uploadToSplitPDF = (file: File, onProgress?: (p: number) => void): Promise<File[]> => {
   return new Promise(async (resolve, reject) => {
     try {
-      const CHUNK_SIZE = 15 * 1024 * 1024;
+      const CHUNK_SIZE = 3 * 1024 * 1024;
       const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
       const uuid = Math.random().toString(36).substring(2) + Date.now().toString(36);
       
@@ -1526,7 +1797,11 @@ export const uploadToSplitPDF = (file: File, onProgress?: (p: number) => void): 
         const response: any = await new Promise((res, rej) => {
           xhr.onload = () => {
             if (xhr.status >= 200 && xhr.status < 300) {
-              res(JSON.parse(xhr.responseText));
+              try {
+                res(JSON.parse(xhr.responseText));
+              } catch (e) {
+                rej(new Error("Server returned non-JSON response: " + xhr.responseText.substring(0, 100)));
+              }
             } else {
               let errText = xhr.responseText;
               try { errText = JSON.parse(errText).error; } catch(e){}
@@ -1569,7 +1844,7 @@ export const uploadToSplitPDF = (file: File, onProgress?: (p: number) => void): 
 export const uploadFileToGemini = (file: File, apiKey?: string, onProgress?: (percent: number) => void): Promise<string> => {
   return new Promise(async (resolve, reject) => {
     try {
-      const CHUNK_SIZE = 15 * 1024 * 1024; // 15MB chunks
+      const CHUNK_SIZE = 3 * 1024 * 1024; // 3MB chunks
       const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
       const uuid = Math.random().toString(36).substring(2) + Date.now().toString(36);
       
@@ -1604,7 +1879,11 @@ export const uploadFileToGemini = (file: File, apiKey?: string, onProgress?: (pe
           };
           xhr.onload = () => {
             if (xhr.status >= 200 && xhr.status < 300) {
-              res(JSON.parse(xhr.responseText));
+              try {
+                res(JSON.parse(xhr.responseText));
+              } catch (e) {
+                rej(new Error("Server returned non-JSON response: " + xhr.responseText.substring(0, 100)));
+              }
             } else {
               let errObj;
               try { errObj = JSON.parse(xhr.responseText); } catch(e) { errObj = { error: { message: xhr.statusText } }; }
@@ -1640,6 +1919,7 @@ export const processFileForApi = (
   onProgress?: (p: number) => void
 ): Promise<{data?: string, fileUri?: string, mimeType: string, url?: string, extractedText?: string}> => {
   return new Promise(async (resolve, reject) => {
+    const currentLang = localStorage.getItem('lang') || 'zh';
     let extractedText: string | undefined;
     if ((file.name.toLowerCase().endsWith('.docx') || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') && file.size < 5 * 1024 * 1024) {
       try {
@@ -1681,16 +1961,29 @@ export const processFileForApi = (
       };
 
       const hasValidKey = apiKey && !isPlaceholderKey(apiKey);
+      const isFreeTier = !apiKey || isPlaceholderKey(apiKey);
+
+      const isGeminiUpload = !isFreeTier && (
+        file.type.startsWith('video/') || 
+        file.type.startsWith('application/pdf') || 
+        file.name.toLowerCase().endsWith('.pdf') || 
+        file.name.toLowerCase().endsWith('.docx') || 
+        file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || 
+        file.size > 15 * 1024 * 1024
+      );
 
       // Start concurrent tasks
       const tasks: Promise<any>[] = [];
 
-      // Start a smooth progress simulation
-      let currentProgress = 0;
-      const progressTimer = setInterval(() => {
-        currentProgress += (90 - currentProgress) * 0.1; // Ease-out toward 90%
-        if (onProgress) onProgress(currentProgress);
-      }, 500);
+      // Only run simulated progress loop if we are NOT using actual streaming chunk indicators
+      let progressTimer: NodeJS.Timeout | undefined;
+      if (!isGeminiUpload) {
+        let currentProgress = 10;
+        progressTimer = setInterval(() => {
+          currentProgress += (95 - currentProgress) * 0.05; // Slower, smoother simulation fallback
+          if (onProgress) onProgress(Math.round(currentProgress));
+        }, 120);
+      }
 
       // Task 1: ImageKit for preview
       if (import.meta.env.VITE_IMAGEKIT_PUBLIC_KEY) {
@@ -1715,11 +2008,11 @@ export const processFileForApi = (
 
       // Task 2: Gemini or Base64
       tasks.push((async () => {
-        if (file.type.startsWith('video/') || file.type.startsWith('application/pdf') || file.name.toLowerCase().endsWith('.pdf') || file.name.toLowerCase().endsWith('.docx') || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.size > 15 * 1024 * 1024) {
+        if (isGeminiUpload) {
           try {
-            fileUri = await uploadFileToGemini(file, hasValidKey ? apiKey! : "");
+            // Pass onProgress so chunk upload has real network feedback!
+            fileUri = await uploadFileToGemini(file, apiKey || "", onProgress);
           } catch (err: any) {
-            // Check if it's an API key error to "ignore" or handle silently
             const errorText = err?.message || JSON.stringify(err);
             const isApiKeyError = errorText.includes("API key not valid") || errorText.includes("API_KEY_INVALID");
             
@@ -1727,20 +2020,35 @@ export const processFileForApi = (
               console.error("Gemini upload failed during processing", err);
             }
             
-            // Fallback to base64 if <= 20MB
-            if (file.size <= 20 * 1024 * 1024) {
-              if (!isApiKeyError) console.log("Falling back to Base64 (inlineData) because Gemini upload failed");
-              try {
-                data = await fileToBase64(file);
-              } catch (e) {
-                console.error("Base64 conversion failed", e);
-                if (!isApiKeyError) reject(new Error("Failed to process file locally: " + e));
-              }
-            } else if (!isApiKeyError) {
-              reject(new Error("File too large for local processing. Limits to 20MB per chunk."));
+            // Large files fall back to Base64 is highly risky and will crash the tab on memory. Guard here.
+            if (file.size > 10 * 1024 * 1024) {
+              const sizeMb = (file.size / 1024 / 1024).toFixed(1);
+              const errMsg = currentLang === 'zh'
+                ? `上传失败，且文件较大（${sizeMb}MB）。由于没有发现有效的 API 密钥，系统无法使用分布式直接传输，而本地转换会导致浏览器由于内存容量耗尽而崩溃。请配置有效 API Key 后重试。`
+                : `Upload failed, and the file is large (${sizeMb}MB). Under Free Tier limits, streaming chunk upload failed, and local backup will crash your browser tab on memory exhaustion. Please configure a custom API Key.`;
+              reject(new Error(errMsg));
+              return;
+            }
+
+            if (!isApiKeyError) console.log("Falling back to Base64 (inlineData) because Gemini upload failed");
+            try {
+              data = await fileToBase64(file);
+            } catch (e) {
+              console.error("Base64 conversion failed", e);
+              if (!isApiKeyError) reject(new Error("Failed to process file locally: " + e));
             }
           }
         } else {
+          // Guard for Free Tier users uploading raw files larger than 10MB to avoid OOM crash
+          if (file.size > 10 * 1024 * 1024) {
+            const sizeMb = (file.size / 1024 / 1024).toFixed(1);
+            const errMsg = currentLang === 'zh'
+              ? `当前处于免费体验模式。文件分包 (${sizeMb}MB) 超过了 10MB 客户端转换上限。为了防止浏览器内存益处死机，请在设置中配置生效的 API Key，或将单张上传文件控制在 10MB 以内。`
+              : `Currently on Free Tier. File portion (${sizeMb}MB) exceeds the 10MB local encoding limit. Direct Base64 encoding in the browser will exhaust heap memory and crash the tab. Please set up a custom API Key, or minimize files under 10MB.`;
+            reject(new Error(errMsg));
+            return;
+          }
+
           try {
             data = await fileToBase64(file);
           } catch (err) {
@@ -1753,7 +2061,7 @@ export const processFileForApi = (
       try {
         await Promise.all(tasks);
       } finally {
-        clearInterval(progressTimer);
+        if (progressTimer) clearInterval(progressTimer);
       }
       if (onProgress) onProgress(100);
 
@@ -1791,6 +2099,29 @@ const FileIconForType = ({ type, name, size = 24 }: { type: string, name: string
   if (lcName.endsWith('.pptx') || type.includes('presentation')) return <Presentation size={size} />;
   return <FileText size={size} />;
 };
+
+const submenuStaggerContainer = {
+  hidden: {},
+  visible: {
+    transition: {
+      staggerChildren: 0.04,
+      delayChildren: 0.05,
+    }
+  }
+} as const;
+
+const submenuStaggerItem = {
+  hidden: { opacity: 0, x: -12 },
+  visible: { 
+    opacity: 1, 
+    x: 0,
+    transition: { 
+      type: "spring" as const, 
+      stiffness: 280, 
+      damping: 24 
+    } 
+  }
+} as const;
 
 export default function App() {
   const [lang, setLang] = useState<'en' | 'zh'>(() => (localStorage.getItem('lang') as 'en' | 'zh') || 'zh');
@@ -1929,13 +2260,26 @@ export default function App() {
     currentShowCode: boolean,
     currentIsAgentMode: boolean
   ) => {
+    // Release heavy binary data references from history to prevent memory leak crashes during sessions
+    const leanMessages = currentMessages.map(m => {
+      if (!m.attachments || m.attachments.length === 0) return m;
+      return {
+        ...m,
+        attachments: m.attachments.map(att => ({
+          ...att,
+          data: undefined, // Clear raw base64 data to release RAM
+          file: undefined, // Clear original file reference
+        }))
+      };
+    });
+
     setSessions(prev => prev.map(s => 
       s.id === sessionId 
-        ? { ...s, docState: currentDocState, messages: currentMessages, lastJson: currentLastJson, currentDocId: currentDocId, showCode: currentShowCode, isAgentMode: currentIsAgentMode } 
+        ? { ...s, docState: currentDocState, messages: leanMessages, lastJson: currentLastJson, currentDocId: currentDocId, showCode: currentShowCode, isAgentMode: currentIsAgentMode } 
         : s
     ));
   }, []);
-  const [selectedModel, setSelectedModel] = useState("gemini-3-flash-preview");
+  const [selectedModel, setSelectedModel] = useState("gemini-3.5-flash");
   const [isMobile, setIsMobile] = useState(false);
   const [isLandscape, setIsLandscape] = useState(false);
   const [activeTab, setActiveTab] = useState<"chat" | "preview">("chat");
@@ -2497,6 +2841,19 @@ export default function App() {
   const handleMainDocUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    const maxMb = 60;
+    const maxBytes = maxMb * 1024 * 1024;
+    if (file.size > maxBytes) {
+      const sizeMb = (file.size / 1024 / 1024).toFixed(1);
+      showToast(
+        lang === 'zh'
+          ? `无法加载文档 (${sizeMb}MB)。为防止解析超时与内存溢出，Word文档上传限制在 ${maxMb}MB 以内，请拆分或压缩后重新上传。`
+          : `Could not load document (${sizeMb}MB). To prevent timeout and out-of-memory, Word document upload is limited to ${maxMb}MB. Please split or compress and retry.`
+      );
+      e.target.value = '';
+      return;
+    }
     
     try {
       const parsed = await parseWordDoc(file);
@@ -2628,7 +2985,9 @@ export default function App() {
         type: att.type,
         previewUrl: att.previewUrl,
         url: att.url,
-        data: att.data,
+        // Memory optimization: clear large base64 strings from history immediately to prevent scrolling OOM crash.
+        // If they are small images (under 1MB), we can keep a reference, otherwise discard raw binary string from history state
+        data: (att.type.startsWith('image/') && att.data && att.data.length < 1000000) ? att.data : undefined,
         fileUri: att.fileUri,
         extractedText: att.extractedText
       }));
@@ -2991,7 +3350,7 @@ CRITICAL INSTRUCTIONS:
                 model: selectedModel,
                 contents: taskContents as any,
                 config: {
-                  systemInstruction: SYSTEM_INSTRUCTION,
+                  systemInstruction: getDynamicSystemInstruction(),
                 }
               }));
               break;
@@ -3127,7 +3486,7 @@ CRITICAL INSTRUCTIONS:
             model: selectedModel,
             contents,
             config: {
-              systemInstruction: SYSTEM_INSTRUCTION,
+              systemInstruction: getDynamicSystemInstruction(),
             }
           });
           break;
@@ -3265,7 +3624,18 @@ CRITICAL INSTRUCTIONS:
       }
 
       const finalMessagesUpdater = (prev: ChatMessage[]): ChatMessage[] => {
-        const newMessages = [...prev];
+        // Purge large data and file references on the final stream tick to return memory to OS
+        const newMessages = prev.map(m => {
+          if (!m.attachments || m.attachments.length === 0) return m;
+          return {
+            ...m,
+            attachments: m.attachments.map(att => ({
+              ...att,
+              data: undefined,
+              file: undefined
+            }))
+          };
+        });
         if (newMessages.length > 0) {
           newMessages[newMessages.length - 1] = { 
             role: "model", 
@@ -4408,20 +4778,20 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
         isAgentMode && "opacity-0"
       )}>
         <div className={cn(
-          "absolute -top-[10%] -left-[5%] w-[60%] h-[60%] rounded-full filter blur-[120px] animate-blob",
+          "absolute -top-[10%] -left-[5%] w-[60%] h-[60%] rounded-full filter blur-[120px] animate-blob transition-all duration-700",
           darkMode ? "bg-indigo-600/40 opacity-70" : "bg-blue-300/60 opacity-90"
         )} style={{ animationDuration: '8s' }} />
         <div className={cn(
-          "absolute top-[15%] -right-[5%] w-[50%] h-[70%] rounded-full filter blur-[120px] animate-blob",
+          "absolute top-[15%] -right-[5%] w-[50%] h-[70%] rounded-full filter blur-[120px] animate-blob transition-all duration-700",
           darkMode ? "bg-purple-600/40 opacity-70" : "bg-purple-300/60 opacity-90"
         )} style={{ animationDuration: '12s', animationDelay: '2s' }} />
         <div className={cn(
-          "absolute -bottom-[15%] left-[15%] w-[70%] h-[60%] rounded-full filter blur-[120px] animate-blob",
+          "absolute -bottom-[15%] left-[15%] w-[70%] h-[60%] rounded-full filter blur-[120px] animate-blob transition-all duration-700",
           darkMode ? "bg-blue-600/40 opacity-70" : "bg-indigo-300/60 opacity-90"
         )} style={{ animationDuration: '10s', animationDelay: '4s' }} />
         {/* Brighter Light Blobs */}
         <div className={cn(
-          "absolute top-[30%] left-[20%] w-[40%] h-[40%] rounded-full filter blur-[100px] animate-blob",
+          "absolute top-[30%] left-[20%] w-[40%] h-[40%] rounded-full filter blur-[100px] animate-blob transition-all duration-700",
           darkMode ? "bg-blue-400/30 opacity-50" : "bg-white/100 opacity-100 shadow-[0_0_100px_rgba(255,255,255,0.5)]"
         )} style={{ animationDuration: '15s', animationDelay: '1s' }} />
       </div>
@@ -5162,24 +5532,28 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                   }
                 }}
                 className={cn(
-                  "absolute top-0 left-1/2 -translate-x-1/2 z-[60] min-h-[44px] py-[6px] flex flex-col justify-start items-center px-2 md:px-4 shrink-0 shadow-sm rounded-2xl pointer-events-auto transform-gpu will-change-[height] backdrop-blur-xl",
+                  "absolute top-0 left-0 right-0 mx-auto z-[60] min-h-[44px] flex flex-col justify-start items-center shrink-0 rounded-2xl pointer-events-auto",
                   (isMobile && !isLandscape) 
                     ? "w-max max-w-[96vw]" 
-                    : "w-max max-w-[95%]",
-                  darkMode ? "text-white" : "text-gray-900"
+                    : "w-max max-w-[95%]"
                 )}
               >
-              {/* Background element with blur - stabilized rendering */}
-              <div className={cn(
-                "absolute inset-0 border -z-10 backdrop-blur-md pointer-events-none rounded-2xl transform-gpu",
-                darkMode ? "bg-black/20 border-white/10" : "bg-white/20 border-black/5"
-              )} />
-            
-            {(() => {
-                const p = focusedBlock ? docState.sections[focusedBlock.s].paragraphs[focusedBlock.p] : null;
-                const focusedPara = p && p.type !== 'table' ? p as DocParagraph : null;
-                return (
-                  <>
+                {/* Background layer: completely separated, pure CSS layout to keep backdrop-filter perfectly stable without transforms */}
+                <div className={cn(
+                  "absolute inset-0 border -z-10 backdrop-blur-md rounded-2xl shadow-sm transition-colors duration-300",
+                  darkMode ? "bg-black/20 border-white/10" : "bg-white/20 border-black/5"
+                )} />
+
+                {/* Content layer: statically positioned, no layout scale transforms can affect the text */}
+                <div className={cn(
+                  "w-full h-full py-[6px] px-2 md:px-4 flex flex-col justify-start items-center overflow-hidden",
+                  darkMode ? "text-white" : "text-gray-900"
+                )}>
+                  {(() => {
+                      const p = focusedBlock ? docState.sections[focusedBlock.s].paragraphs[focusedBlock.p] : null;
+                      const focusedPara = p && p.type !== 'table' ? p as DocParagraph : null;
+                      return (
+                        <>
                     <AnimatePresence>
                       {isFormatPainterActive && (
                         <motion.div 
@@ -5200,10 +5574,10 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                     <button 
                       onClick={handleFormatPainterClick} 
                       className={cn(
-                        "p-1 rounded transition-colors flex items-center gap-1",
+                        "p-1 rounded transition-colors flex items-center gap-1 focus:outline-none [-webkit-tap-highlight-color:transparent]",
                         isFormatPainterActive 
-                          ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm" 
-                          : "hover:bg-gray-100 dark:hover:bg-[#333]"
+                          ? "bg-white text-gray-900 border border-gray-200/60 dark:bg-white/10 dark:text-white dark:border-white/10 shadow-sm" 
+                          : "hover:bg-gray-100/60 dark:hover:bg-white/10 text-inherit"
                       )} 
                       title="Format Painter"
                     >
@@ -5215,8 +5589,8 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                       onClick={undo}
                       disabled={history.index === 0}
                       className={cn(
-                        "p-1 rounded transition-colors",
-                        history.index === 0 ? "opacity-30 cursor-not-allowed" : "hover:bg-gray-100 dark:hover:bg-[#333]"
+                        "p-1 rounded transition-colors focus:outline-none [-webkit-tap-highlight-color:transparent]",
+                        history.index === 0 ? "opacity-30 cursor-not-allowed" : "hover:bg-gray-100/60 dark:hover:bg-white/10 text-inherit"
                       )}
                       title={t.undo}
                     >
@@ -5226,8 +5600,8 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                       onClick={redo}
                       disabled={history.index === history.stack.length - 1}
                       className={cn(
-                        "p-1 rounded transition-colors",
-                        history.index === history.stack.length - 1 ? "opacity-30 cursor-not-allowed" : "hover:bg-gray-100 dark:hover:bg-[#333]"
+                        "p-1 rounded transition-colors focus:outline-none [-webkit-tap-highlight-color:transparent]",
+                        history.index === history.stack.length - 1 ? "opacity-30 cursor-not-allowed" : "hover:bg-gray-100/60 dark:hover:bg-white/10 text-inherit"
                       )}
                       title={t.redo}
                     >
@@ -5235,14 +5609,13 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                     </button>
                     <div className="w-px h-3 bg-gray-300 dark:bg-gray-600 mx-0.5" />
                     
-
                     <button 
                       onClick={() => updateFocusedBlock({ isBold: 'toggle' })} 
                       className={cn(
-                        "p-1 rounded transition-colors",
+                        "p-1 rounded transition-colors focus:outline-none [-webkit-tap-highlight-color:transparent]",
                         focusedPara && focusedPara.isBold
-                          ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
-                          : "hover:bg-gray-100 dark:hover:bg-[#333]"
+                          ? "bg-white text-gray-900 border border-gray-200/60 dark:bg-white/10 dark:text-white dark:border-white/10 shadow-sm font-medium"
+                          : "hover:bg-gray-100/60 dark:hover:bg-white/10 text-inherit"
                       )} 
                       title="Bold"
                     >
@@ -5251,10 +5624,10 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                     <button 
                       onClick={() => updateFocusedBlock({ isItalic: 'toggle' })} 
                       className={cn(
-                        "p-1 rounded transition-colors",
+                        "p-1 rounded transition-colors focus:outline-none [-webkit-tap-highlight-color:transparent]",
                         focusedPara && focusedPara.isItalic
-                          ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
-                          : "hover:bg-gray-100 dark:hover:bg-[#333]"
+                          ? "bg-white text-gray-900 border border-gray-200/60 dark:bg-white/10 dark:text-white dark:border-white/10 shadow-sm"
+                          : "hover:bg-gray-100/60 dark:hover:bg-white/10 text-inherit"
                       )} 
                       title="Italic"
                     >
@@ -5266,10 +5639,10 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                     <button 
                       onClick={() => setActiveDropdown(activeDropdown === 'align' ? null : 'align')}
                       className={cn(
-                        "flex items-center gap-0.5 p-1 rounded transition-colors",
+                        "flex items-center gap-0.5 p-1 rounded transition-colors focus:outline-none [-webkit-tap-highlight-color:transparent]",
                         activeDropdown === 'align'
-                          ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
-                          : "hover:bg-gray-100 dark:hover:bg-[#333] text-inherit"
+                          ? "bg-white text-gray-900 border border-gray-200/60 dark:bg-white/10 dark:text-white dark:border-white/10 shadow-sm"
+                          : "hover:bg-gray-100/60 dark:hover:bg-white/10 text-inherit"
                       )}
                       title="Alignment"
                     >
@@ -5282,34 +5655,34 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                           default: return <AlignLeft size={15} />;
                         }
                       })()}
-                      <ChevronDown size={10} className={cn("transition-transform duration-200", activeDropdown === 'align' ? "text-black dark:text-white rotate-180" : "text-gray-400")} />
+                      <ChevronDown size={10} className={cn("transition-transform duration-200", activeDropdown === 'align' ? "text-gray-900 dark:text-white rotate-180" : "text-gray-400")} />
                     </button>
-
+ 
                     {/* Color Dropdown */}
                     <button 
                       onClick={() => setActiveDropdown(activeDropdown === 'color' ? null : 'color')}
                       className={cn(
-                        "flex items-center gap-0.5 p-1 rounded transition-colors",
+                        "flex items-center gap-0.5 p-1 rounded transition-colors focus:outline-none [-webkit-tap-highlight-color:transparent]",
                         activeDropdown === 'color'
-                          ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
-                          : "hover:bg-gray-100 dark:hover:bg-[#333] text-inherit"
+                          ? "bg-white text-gray-900 border border-gray-200/60 dark:bg-white/10 dark:text-white dark:border-white/10 shadow-sm"
+                          : "hover:bg-gray-100/60 dark:hover:bg-white/10 text-inherit"
                       )}
                       title="Font Color"
                     >
                       <Palette size={15} style={{ color: focusedPara ? (focusedPara.color || 'inherit') : 'inherit' }} />
-                      <ChevronDown size={10} className={cn("transition-transform duration-200", activeDropdown === 'color' ? "text-black dark:text-white rotate-180" : "text-gray-400")} />
+                      <ChevronDown size={10} className={cn("transition-transform duration-200", activeDropdown === 'color' ? "text-gray-900 dark:text-white rotate-180" : "text-gray-400")} />
                     </button>
-
+ 
                     <div className="w-px h-3 bg-gray-300 dark:bg-gray-600 mx-0.5" />
                     
                     {/* Lists Dropdown */}
                     <button 
                       onClick={() => setActiveDropdown(activeDropdown === 'list' ? null : 'list')}
                       className={cn(
-                        "flex items-center gap-0.5 p-1 rounded transition-colors",
+                        "flex items-center gap-0.5 p-1 rounded transition-colors focus:outline-none [-webkit-tap-highlight-color:transparent]",
                         activeDropdown === 'list'
-                          ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
-                          : "hover:bg-gray-100 dark:hover:bg-[#333] text-inherit"
+                          ? "bg-white text-gray-900 border border-gray-200/60 dark:bg-white/10 dark:text-white dark:border-white/10 shadow-sm"
+                          : "hover:bg-gray-100/60 dark:hover:bg-white/10 text-inherit"
                       )}
                       title="Lists"
                     >
@@ -5317,9 +5690,9 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                         if (focusedPara?.isNumbering) return <ListOrdered size={15} />;
                         return <List size={15} />;
                       })()}
-                      <ChevronDown size={10} className={cn("transition-transform duration-200", activeDropdown === 'list' ? "text-black dark:text-white rotate-180" : "text-gray-400")} />
+                      <ChevronDown size={10} className={cn("transition-transform duration-200", activeDropdown === 'list' ? "text-gray-900 dark:text-white rotate-180" : "text-gray-400")} />
                     </button>
-
+ 
                     <div className="w-px h-3 bg-gray-300 dark:bg-gray-600 mx-0.5" />
                     <button onClick={() => {
                       if (!focusedBlock) return;
@@ -5331,18 +5704,18 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                         return next;
                       });
                       setFocusedBlock({ s: focusedBlock.s, p: focusedBlock.p + 1 });
-                    }} className="p-1 hover:bg-blue-100 text-blue-500 rounded transition-colors" title="Add Paragraph Below"><Plus size={15} /></button>
-                    <button onClick={deleteFocusedBlock} className="p-1 hover:bg-red-100 text-red-500 rounded transition-colors" title="Delete Paragraph"><Trash size={15} /></button>
+                    }} className="p-1 hover:bg-blue-50 text-blue-500 rounded transition-colors focus:outline-none [-webkit-tap-highlight-color:transparent]" title="Add Paragraph Below"><Plus size={15} /></button>
+                    <button onClick={deleteFocusedBlock} className="p-1 hover:bg-red-50 text-red-500 rounded transition-colors focus:outline-none [-webkit-tap-highlight-color:transparent]" title="Delete Paragraph"><Trash size={15} /></button>
                     <div className="w-px h-3 bg-gray-300 dark:bg-gray-600 mx-0.5" />
                     
                     {/* More Formatting Button */}
                     <button 
                       onClick={() => setActiveDropdown((activeDropdown === 'more' || activeDropdown === 'fontFamily' || activeDropdown === 'fontSize') ? null : 'more')}
                       className={cn(
-                        "flex items-center gap-0.5 p-1 rounded transition-colors",
+                        "flex items-center gap-0.5 p-1 rounded transition-colors focus:outline-none [-webkit-tap-highlight-color:transparent]",
                         (activeDropdown === 'more' || activeDropdown === 'fontFamily' || activeDropdown === 'fontSize')
-                          ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
-                          : "hover:bg-gray-100 dark:hover:bg-[#333] text-inherit"
+                          ? "bg-white text-gray-900 border border-gray-200/60 dark:bg-white/10 dark:text-white dark:border-white/10 shadow-sm"
+                          : "hover:bg-gray-100/60 dark:hover:bg-white/10 text-inherit"
                       )}
                       title="More Options"
                     >
@@ -5350,7 +5723,7 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                         size={15} 
                         className={cn(
                           "transition-transform duration-200",
-                          (activeDropdown === 'more' || activeDropdown === 'fontFamily' || activeDropdown === 'fontSize') ? "rotate-180" : "rotate-0"
+                          (activeDropdown === 'more' || activeDropdown === 'fontFamily' || activeDropdown === 'fontSize') ? "text-gray-900 dark:text-white rotate-180" : "rotate-0 text-gray-400"
                         )} 
                       />
                     </button>
@@ -5363,269 +5736,308 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
                           initial={{ height: 0, opacity: 0 }}
                           animate={{ height: 'auto', opacity: 1 }}
                           exit={{ height: 0, opacity: 0 }}
-                          transition={{ duration: 0.2, ease: "easeInOut" }}
+                          transition={{ 
+                            height: { duration: 0.25, ease: "easeInOut" }, 
+                            opacity: { duration: 0.2 }
+                          }}
                           className="w-full relative z-50 overflow-hidden flex flex-col items-center"
-                        >
-                          {(activeDropdown === 'more' || activeDropdown === 'fontFamily' || activeDropdown === 'fontSize') && (
-                            <div 
-                              className="w-full flex items-center justify-center border-t pt-1.5 mt-1.5"
-                              style={{ borderColor: darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }}
-                            >
-                              <div className="flex items-center gap-3 md:gap-4 py-1 px-2 w-full justify-center">
-                                {/* Font Family Selection */}
-                                <button
-                                  onClick={() => setActiveDropdown(activeDropdown === 'fontFamily' ? 'more' : 'fontFamily')}
-                                  className={cn(
-                                    "flex items-center gap-1.5 px-2 md:px-3 py-1 rounded transition-colors border-transparent",
-                                    activeDropdown === 'fontFamily' 
-                                      ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
-                                      : "hover:bg-gray-100 dark:hover:bg-[#333] text-inherit"
-                                  )}
+                                                  >
+                            <AnimatePresence mode="popLayout">
+                              {/* Group: more, fontFamily, fontSize */}
+                              {['more', 'fontFamily', 'fontSize'].includes(activeDropdown) && (
+                                <motion.div
+                                  key="more-group"
+                                  initial={{ opacity: 0, filter: "blur(4px)" }}
+                                  animate={{ opacity: 1, filter: "blur(0px)" }}
+                                  exit={{ opacity: 0, filter: "blur(4px)" }}
+                                  transition={{ duration: 0.15 }}
+                                  className="w-full"
                                 >
-                                  <Type size={14} className="opacity-50" />
-                                  <span className="text-[11px] md:text-xs truncate w-[60px] md:w-[70px] text-left">
-                                    {focusedPara?.fontFamily ? focusedPara.fontFamily.split(',')[0].replace(/'/g, '') : "Default"}
-                                  </span>
-                                  <ChevronDown size={12} className={cn("transition-transform", activeDropdown === 'fontFamily' && "rotate-180")} />
-                                </button>
+                                  <motion.div 
+                                    variants={submenuStaggerContainer}
+                                    initial="hidden"
+                                    animate="visible"
+                                    className="w-full flex items-center justify-center border-t pt-1.5 mt-1.5 transition-colors duration-300 pointer-events-auto"
+                                    style={{ borderColor: darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }}
+                                  >
+                                    <div className="flex items-center gap-3 md:gap-4 py-1 px-2 w-full justify-center">
+                                      {/* Font Family Selection */}
+                                      <motion.button
+                                        variants={submenuStaggerItem}
+                                        onClick={() => setActiveDropdown(activeDropdown === 'fontFamily' ? 'more' : 'fontFamily')}
+                                        className={cn(
+                                          "flex items-center gap-1.5 px-2 md:px-3 py-1 rounded transition-colors focus:outline-none [-webkit-tap-highlight-color:transparent]",
+                                          activeDropdown === 'fontFamily' 
+                                            ? "bg-white text-gray-900 border border-gray-200/60 dark:bg-white/10 dark:text-white dark:border-white/10 shadow-sm font-medium"
+                                            : "hover:bg-gray-100/60 dark:hover:bg-white/10 text-inherit"
+                                        )}
+                                      >
+                                        <Type size={14} className="opacity-50" />
+                                        <span className="text-[11px] md:text-xs truncate w-[60px] md:w-[70px] text-left">
+                                          {focusedPara?.fontFamily ? focusedPara.fontFamily.split(',')[0].replace(/'/g, '') : "Default"}
+                                        </span>
+                                        <ChevronDown size={12} className={cn("transition-transform", activeDropdown === 'fontFamily' && "rotate-180")} />
+                                      </motion.button>
+                                        
+                                      {/* Font Size Selection */}
+                                      <motion.button
+                                        variants={submenuStaggerItem}
+                                        onClick={() => setActiveDropdown(activeDropdown === 'fontSize' ? 'more' : 'fontSize')}
+                                        className={cn(
+                                          "flex items-center gap-1.5 px-2 md:px-3 py-1 rounded transition-colors focus:outline-none [-webkit-tap-highlight-color:transparent]",
+                                          activeDropdown === 'fontSize' 
+                                            ? "bg-white text-gray-900 border border-gray-200/60 dark:bg-white/10 dark:text-white dark:border-white/10 shadow-sm font-medium"
+                                            : "hover:bg-gray-100/60 dark:hover:bg-white/10 text-inherit"
+                                        )}
+                                      >
+                                        <div className="flex items-baseline font-serif leading-none tracking-tight opacity-70">
+                                          <span className="text-[14px]">A</span>
+                                          <span className="text-[10px]">a</span>
+                                        </div>
+                                        <span className="text-[11px] md:text-xs truncate w-[30px] md:w-[40px] text-center">
+                                          {focusedPara?.fontSize || "Def"}
+                                        </span>
+                                        <ChevronDown size={12} className={cn("opacity-50 transition-transform", activeDropdown === 'fontSize' && "rotate-180")} />
+                                      </motion.button>
+                                    </div>
+                                  </motion.div>
                                   
-                                {/* Font Size Selection */}
-                                <button
-                                  onClick={() => setActiveDropdown(activeDropdown === 'fontSize' ? 'more' : 'fontSize')}
-                                  className={cn(
-                                    "flex items-center gap-1.5 px-2 md:px-3 py-1 rounded transition-colors border-transparent",
-                                    activeDropdown === 'fontSize' 
-                                      ? "bg-white dark:bg-[#444] text-black dark:text-white shadow-sm"
-                                      : "hover:bg-gray-100 dark:hover:bg-[#333] text-inherit"
-                                  )}
-                                >
-                                  <div className="flex items-baseline font-serif leading-none tracking-tight opacity-70">
-                                    <span className="text-[14px]">A</span>
-                                    <span className="text-[10px]">a</span>
-                                  </div>
-                                  <span className="text-[11px] md:text-xs truncate w-[30px] md:w-[40px] text-center">
-                                    {focusedPara?.fontSize || "Def"}
-                                  </span>
-                                  <ChevronDown size={12} className={cn("opacity-50 transition-transform", activeDropdown === 'fontSize' && "rotate-180")} />
-                                </button>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* INLINE Sub-menu Content (The Fix) */}
-                          <AnimatePresence mode="wait">
-                            {/* Alignment Options */}
-                            {activeDropdown === 'align' && (
-                              <motion.div 
-                                key="align-list"
-                                initial={{ height: 0, opacity: 0 }} 
-                                animate={{ height: 'auto', opacity: 1 }} 
-                                exit={{ height: 0, opacity: 0 }}
-                                className="w-full flex flex-wrap justify-center gap-2 p-2 border-t mt-1"
-                                style={{ borderColor: darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }}
-                              >
-                                <button 
-                                  onClick={() => { updateFocusedBlock({ alignment: 'left' }); }} 
-                                  className={cn(
-                                    "p-1.5 rounded transition-colors border border-transparent",
-                                    (focusedPara?.alignment === 'left' || !focusedPara?.alignment)
-                                      ? "bg-blue-500 text-white shadow-sm"
-                                      : "hover:bg-black/5 dark:hover:bg-white/10"
-                                  )} 
-                                  title="Align Left"
-                                >
-                                  <AlignLeft size={16} />
-                                </button>
-                                <button 
-                                  onClick={() => { updateFocusedBlock({ alignment: 'center' }); }} 
-                                  className={cn(
-                                    "p-1.5 rounded transition-colors border border-transparent",
-                                    focusedPara?.alignment === 'center'
-                                      ? "bg-blue-500 text-white shadow-sm"
-                                      : "hover:bg-black/5 dark:hover:bg-white/10"
-                                  )} 
-                                  title="Align Center"
-                                >
-                                  <AlignCenter size={16} />
-                                </button>
-                                <button 
-                                  onClick={() => { updateFocusedBlock({ alignment: 'right' }); }} 
-                                  className={cn(
-                                    "p-1.5 rounded transition-colors border border-transparent",
-                                    focusedPara?.alignment === 'right'
-                                      ? "bg-blue-500 text-white shadow-sm"
-                                      : "hover:bg-black/5 dark:hover:bg-white/10"
-                                  )} 
-                                  title="Align Right"
-                                >
-                                  <AlignRight size={16} />
-                                </button>
-                                <button 
-                                  onClick={() => { updateFocusedBlock({ alignment: 'justify' }); }} 
-                                  className={cn(
-                                    "p-1.5 rounded transition-colors border border-transparent",
-                                    focusedPara?.alignment === 'justify'
-                                      ? "bg-blue-500 text-white shadow-sm"
-                                      : "hover:bg-black/5 dark:hover:bg-white/10"
-                                  )} 
-                                  title="Justify"
-                                >
-                                  <AlignJustify size={16} />
-                                </button>
-                              </motion.div>
-                            )}
-                            
-                            {/* Color Options */}
-                            {activeDropdown === 'color' && (
-                              <motion.div 
-                                key="color-list"
-                                initial={{ height: 0, opacity: 0 }} 
-                                animate={{ height: 'auto', opacity: 1 }} 
-                                exit={{ height: 0, opacity: 0 }}
-                                className="w-full flex flex-wrap justify-center gap-3 p-2 border-t mt-1"
-                                style={{ borderColor: darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }}
-                              >
-                                {[
-                                  { name: "De", value: "" },
-                                  { name: "Black", value: "#000000" },
-                                  { name: "Red", value: "#FF0000" },
-                                  { name: "Blue", value: "#2563EB" },
-                                  { name: "Green", value: "#16A34A" },
-                                  { name: "Gray", value: "#6B7280" },
-                                ].map(color => (
-                                  <button
-                                    key={color.name}
-                                    onClick={() => {
-                                      updateFocusedBlock({ color: color.value || undefined });
-                                    }}
-                                    className={cn(
-                                      "w-6 h-6 rounded-full border dark:border-gray-600 transition-transform hover:scale-110 flex items-center justify-center text-[8px]",
-                                      focusedPara?.color === color.value || (!focusedPara?.color && color.value === "") ? "scale-125 ring-2 ring-blue-500 shadow-sm" : ""
+                                  {/* Sub-panels for Font Family and Size */}
+                                  <AnimatePresence mode="popLayout">
+                                    {activeDropdown === 'fontFamily' && (
+                                      <motion.div 
+                                        key="fontFamily"
+                                        initial={{ opacity: 0, filter: "blur(4px)" }}
+                                        animate={{ opacity: 1, filter: "blur(0px)" }}
+                                        exit={{ opacity: 0, filter: "blur(4px)" }}
+                                        transition={{ duration: 0.15 }}
+                                        className="w-full"
+                                      >
+                                        <motion.div 
+                                          variants={submenuStaggerContainer}
+                                          initial="hidden"
+                                          animate="visible"
+                                          className="w-full flex flex-wrap justify-center gap-1 p-2 border-t mt-1 transition-colors duration-300 pointer-events-auto"
+                                          style={{ borderColor: darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }}
+                                        >
+                                          {[
+                                            { name: "Default Font", value: "" },
+                                            { name: "Arial", value: "Arial, sans-serif" },
+                                            { name: "Times New Roman", value: "'Times New Roman', serif" },
+                                            { name: "Courier New", value: "'Courier New', monospace" },
+                                            { name: "Georgia", value: "Georgia, serif" },
+                                            { name: "Verdana", value: "Verdana, sans-serif" }
+                                          ].map(font => (
+                                            <motion.button
+                                              key={font.name}
+                                              variants={submenuStaggerItem}
+                                              onClick={() => { updateFocusedBlock({ fontFamily: font.value }); }}
+                                              className={cn(
+                                                "px-2 py-1 rounded transition-colors text-[10px] md:text-xs border border-transparent whitespace-nowrap focus:outline-none [-webkit-tap-highlight-color:transparent]",
+                                                focusedPara?.fontFamily === font.value 
+                                                  ? "bg-white text-gray-900 border border-gray-200/60 dark:bg-white/20 dark:text-white dark:border-white/10 shadow-sm" 
+                                                  : "hover:bg-gray-100 dark:hover:bg-white/5 active:bg-gray-200/50 dark:active:bg-white/10"
+                                              )}
+                                              style={{ fontFamily: font.value }}
+                                            >
+                                              {font.name}
+                                            </motion.button>
+                                          ))}
+                                        </motion.div>
+                                      </motion.div>
                                     )}
-                                    style={{ backgroundColor: color.value || 'transparent', borderColor: color.value ? 'transparent' : (darkMode ? '#444' : '#e5e7eb') }}
-                                    title={color.name}
-                                  >
-                                    {color.value === "" && "De"}
-                                  </button>
-                                ))}
-                              </motion.div>
-                            )}
-
-                            {/* List Options */}
-                            {activeDropdown === 'list' && (
-                              <motion.div 
-                                key="list-group"
-                                initial={{ height: 0, opacity: 0 }} 
-                                animate={{ height: 'auto', opacity: 1 }} 
-                                exit={{ height: 0, opacity: 0 }}
-                                className="w-full flex flex-wrap justify-center gap-2 p-2 border-t mt-1"
-                                style={{ borderColor: darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }}
-                              >
-                                <button 
-                                  onClick={() => { updateFocusedBlock({ isBullet: 'toggle' }); }} 
-                                  className={cn(
-                                    "p-1.5 rounded transition-colors border border-transparent",
-                                    focusedPara?.isBullet
-                                      ? "bg-blue-500 text-white shadow-sm"
-                                      : "hover:bg-black/5 dark:hover:bg-white/10"
-                                  )} 
-                                  title="Bullet List"
-                                >
-                                  <List size={16} />
-                                </button>
-                                <button 
-                                  onClick={() => { updateFocusedBlock({ isNumbering: 'toggle' }); }} 
-                                  className={cn(
-                                    "p-1.5 rounded transition-colors border border-transparent",
-                                    focusedPara?.isNumbering
-                                      ? "bg-blue-500 text-white shadow-sm"
-                                      : "hover:bg-black/5 dark:hover:bg-white/10"
-                                  )} 
-                                  title="Numbered List"
-                                >
-                                  <ListOrdered size={16} />
-                                </button>
-                              </motion.div>
-                            )}
-
-                            {activeDropdown === 'fontFamily' && (
-                              <motion.div 
-                                key="font-list"
-                                initial={{ height: 0, opacity: 0 }} 
-                                animate={{ height: 'auto', opacity: 1 }} 
-                                exit={{ height: 0, opacity: 0 }}
-                                className="w-full flex flex-wrap justify-center gap-1 p-2 border-t mt-1"
-                                style={{ borderColor: darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }}
-                              >
-                                {[
-                                  { name: "Default Font", value: "" },
-                                  { name: "Arial", value: "Arial, sans-serif" },
-                                  { name: "Times New Roman", value: "'Times New Roman', serif" },
-                                  { name: "Courier New", value: "'Courier New', monospace" },
-                                  { name: "Georgia", value: "Georgia, serif" },
-                                  { name: "Verdana", value: "Verdana, sans-serif" }
-                                ].map(font => (
-                                  <button
-                                    key={font.name}
-                                    onClick={() => { updateFocusedBlock({ fontFamily: font.value }); }}
-                                    className={cn(
-                                      "px-2 py-1 rounded transition-colors text-[10px] md:text-xs border border-transparent whitespace-nowrap",
-                                      focusedPara?.fontFamily === font.value 
-                                        ? "bg-blue-500 text-white shadow-sm" 
-                                        : "hover:bg-black/5 dark:hover:bg-white/10"
+                                    {activeDropdown === 'fontSize' && (
+                                      <motion.div 
+                                        key="fontSize"
+                                        initial={{ opacity: 0, filter: "blur(4px)" }}
+                                        animate={{ opacity: 1, filter: "blur(0px)" }}
+                                        exit={{ opacity: 0, filter: "blur(4px)" }}
+                                        transition={{ duration: 0.15 }}
+                                        className="w-full"
+                                      >
+                                        <motion.div 
+                                          variants={submenuStaggerContainer}
+                                          initial="hidden"
+                                          animate="visible"
+                                          className="w-full flex flex-wrap justify-center gap-1 p-2 border-t mt-1 transition-colors duration-300 pointer-events-auto"
+                                          style={{ borderColor: darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }}
+                                        >
+                                          {[
+                                            { name: "Def", value: "" },
+                                            { name: "8pt", value: "8pt" },
+                                            { name: "9pt", value: "9pt" },
+                                            { name: "10pt", value: "10pt" },
+                                            { name: "11pt", value: "11pt" },
+                                            { name: "12pt", value: "12pt" },
+                                            { name: "14pt", value: "14pt" },
+                                            { name: "18pt", value: "18pt" },
+                                            { name: "24pt", value: "24pt" },
+                                            { name: "36pt", value: "36pt" }
+                                          ].map(size => (
+                                            <motion.button
+                                              key={size.name}
+                                              variants={submenuStaggerItem}
+                                              onClick={() => { updateFocusedBlock({ fontSize: size.value }); }}
+                                              className={cn(
+                                                "w-8 h-8 flex items-center justify-center rounded transition-colors text-[10px] md:text-xs border border-transparent focus:outline-none [-webkit-tap-highlight-color:transparent]",
+                                                focusedPara?.fontSize === size.value 
+                                                  ? "bg-white text-gray-900 border border-gray-200/60 dark:bg-white/20 dark:text-white dark:border-white/10 shadow-sm" 
+                                                  : "hover:bg-gray-100 dark:hover:bg-white/5 active:bg-gray-200/50 dark:active:bg-white/10"
+                                              )}
+                                            >
+                                              {size.name.replace('pt', '')}
+                                            </motion.button>
+                                          ))}
+                                        </motion.div>
+                                      </motion.div>
                                     )}
-                                    style={{ fontFamily: font.value }}
-                                  >
-                                    {font.name}
-                                  </button>
-                                ))}
-                              </motion.div>
-                            )}
+                                  </AnimatePresence>
+                                </motion.div>
+                              )}
 
-                            {activeDropdown === 'fontSize' && (
-                              <motion.div 
-                                key="size-list"
-                                initial={{ height: 0, opacity: 0 }} 
-                                animate={{ height: 'auto', opacity: 1 }} 
-                                exit={{ height: 0, opacity: 0 }}
-                                className="w-full flex flex-wrap justify-center gap-1 p-2 border-t mt-1"
-                                style={{ borderColor: darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }}
-                              >
-                                {[
-                                  { name: "Def", value: "" },
-                                  { name: "8pt", value: "8pt" },
-                                  { name: "9pt", value: "9pt" },
-                                  { name: "10pt", value: "10pt" },
-                                  { name: "11pt", value: "11pt" },
-                                  { name: "12pt", value: "12pt" },
-                                  { name: "14pt", value: "14pt" },
-                                  { name: "18pt", value: "18pt" },
-                                  { name: "24pt", value: "24pt" },
-                                  { name: "36pt", value: "36pt" }
-                                ].map(size => (
-                                  <button
-                                    key={size.name}
-                                    onClick={() => { updateFocusedBlock({ fontSize: size.value }); }}
-                                    className={cn(
-                                      "w-8 h-8 flex items-center justify-center rounded transition-colors text-[10px] md:text-xs border border-transparent",
-                                      focusedPara?.fontSize === size.value 
-                                        ? "bg-blue-500 text-white shadow-sm" 
-                                        : "hover:bg-black/5 dark:hover:bg-white/10"
-                                    )}
+                              {/* Alignment Options */}
+                              {activeDropdown === 'align' && (
+                                <motion.div 
+                                  key="align"
+                                  initial={{ opacity: 0, filter: "blur(4px)" }}
+                                  animate={{ opacity: 1, filter: "blur(0px)" }}
+                                  exit={{ opacity: 0, filter: "blur(4px)" }}
+                                  transition={{ duration: 0.15 }}
+                                  className="w-full"
+                                >
+                                  <motion.div 
+                                    variants={submenuStaggerContainer}
+                                    initial="hidden"
+                                    animate="visible"
+                                    className="w-full flex flex-wrap justify-center gap-2 p-2 border-t mt-1 transition-colors duration-300 pointer-events-auto"
+                                    style={{ borderColor: darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }}
                                   >
-                                    {size.name.replace('pt', '')}
-                                  </button>
-                                ))}
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
+                                    {[
+                                      { icon: <AlignLeft size={16} />, value: 'left', title: 'Align Left' },
+                                      { icon: <AlignCenter size={16} />, value: 'center', title: 'Align Center' },
+                                      { icon: <AlignRight size={16} />, value: 'right', title: 'Align Right' },
+                                      { icon: <AlignJustify size={16} />, value: 'justify', title: 'Justify' },
+                                    ].map(align => (
+                                      <motion.button 
+                                        key={align.value}
+                                        variants={submenuStaggerItem}
+                                        onClick={() => { updateFocusedBlock({ alignment: align.value as any }); }} 
+                                        className={cn(
+                                          "p-1.5 rounded transition-colors border border-transparent focus:outline-none [-webkit-tap-highlight-color:transparent]",
+                                          (focusedPara?.alignment === align.value || (!focusedPara?.alignment && align.value === 'left'))
+                                            ? "bg-white text-gray-900 border border-gray-200/60 dark:bg-white/20 dark:text-white dark:border-white/10 shadow-sm"
+                                            : "hover:bg-gray-100 dark:hover:bg-white/5 active:bg-gray-200/50 dark:active:bg-white/10"
+                                        )} 
+                                        title={align.title}
+                                      >
+                                        {align.icon}
+                                      </motion.button>
+                                    ))}
+                                  </motion.div>
+                                </motion.div>
+                              )}
+                              
+                              {/* Color Options */}
+                              {activeDropdown === 'color' && (
+                                <motion.div 
+                                  key="color"
+                                  initial={{ opacity: 0, filter: "blur(4px)" }}
+                                  animate={{ opacity: 1, filter: "blur(0px)" }}
+                                  exit={{ opacity: 0, filter: "blur(4px)" }}
+                                  transition={{ duration: 0.15 }}
+                                  className="w-full"
+                                >
+                                  <motion.div 
+                                    variants={submenuStaggerContainer}
+                                    initial="hidden"
+                                    animate="visible"
+                                    className="w-full flex flex-wrap justify-center gap-3 p-2 border-t mt-1 transition-colors duration-300 pointer-events-auto"
+                                    style={{ borderColor: darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }}
+                                  >
+                                    {[
+                                      { name: "De", value: "" },
+                                      { name: "Black", value: "#000000" },
+                                      { name: "Red", value: "#FF0000" },
+                                      { name: "Blue", value: "#2563EB" },
+                                      { name: "Green", value: "#16A34A" },
+                                      { name: "Gray", value: "#6B7280" },
+                                    ].map(color => (
+                                      <motion.button
+                                        key={color.name}
+                                        variants={submenuStaggerItem}
+                                        onClick={() => {
+                                          updateFocusedBlock({ color: color.value || undefined });
+                                        }}
+                                        className={cn(
+                                          "w-6 h-6 rounded-full border dark:border-gray-600 transition-transform hover:scale-110 flex items-center justify-center text-[10px] focus:outline-none [-webkit-tap-highlight-color:transparent]",
+                                          focusedPara?.color === color.value || (!focusedPara?.color && color.value === "") ? "scale-125 ring-2 ring-blue-500 shadow-sm" : ""
+                                        )}
+                                        style={{ backgroundColor: color.value || 'transparent', borderColor: color.value ? 'transparent' : (darkMode ? '#444' : '#e5e7eb') }}
+                                        title={color.name}
+                                      >
+                                        {color.value === "" && "De"}
+                                      </motion.button>
+                                    ))}
+                                  </motion.div>
+                                </motion.div>
+                              )}
+
+                              {/* List Options */}
+                              {activeDropdown === 'list' && (
+                                <motion.div 
+                                  key="list"
+                                  initial={{ opacity: 0, filter: "blur(4px)" }}
+                                  animate={{ opacity: 1, filter: "blur(0px)" }}
+                                  exit={{ opacity: 0, filter: "blur(4px)" }}
+                                  transition={{ duration: 0.15 }}
+                                  className="w-full"
+                                >
+                                  <motion.div 
+                                    variants={submenuStaggerContainer}
+                                    initial="hidden"
+                                    animate="visible"
+                                    className="w-full flex flex-wrap justify-center gap-2 p-2 border-t mt-1 transition-colors duration-300 pointer-events-auto"
+                                    style={{ borderColor: darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }}
+                                  >
+                                    <motion.button 
+                                      variants={submenuStaggerItem}
+                                      onClick={() => { updateFocusedBlock({ isBullet: 'toggle' }); }} 
+                                      className={cn(
+                                        "p-1.5 rounded transition-colors border border-transparent focus:outline-none [-webkit-tap-highlight-color:transparent]",
+                                        focusedPara?.isBullet
+                                          ? "bg-white text-gray-900 border border-gray-200/60 dark:bg-white/20 dark:text-white dark:border-white/10 shadow-sm"
+                                          : "hover:bg-gray-100 dark:hover:bg-white/5 active:bg-gray-200/50 dark:active:bg-white/10"
+                                      )} 
+                                      title="Bullet List"
+                                    >
+                                      <List size={16} />
+                                    </motion.button>
+                                    <motion.button 
+                                      variants={submenuStaggerItem}
+                                      onClick={() => { updateFocusedBlock({ isNumbering: 'toggle' }); }} 
+                                      className={cn(
+                                        "p-1.5 rounded transition-colors border border-transparent focus:outline-none [-webkit-tap-highlight-color:transparent]",
+                                        focusedPara?.isNumbering
+                                          ? "bg-white text-gray-900 border border-gray-200/60 dark:bg-white/20 dark:text-white dark:border-white/10 shadow-sm"
+                                          : "hover:bg-gray-100 dark:hover:bg-white/5 active:bg-gray-200/50 dark:active:bg-white/10"
+                                      )} 
+                                      title="Numbered List"
+                                    >
+                                      <ListOrdered size={16} />
+                                    </motion.button>
+                                  </motion.div>
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
                         </motion.div>
                       )}
                     </AnimatePresence>
 
-                  </>
+
+</>
                 );
               })()}
+                </div>
               </div>
             </div>
         )}

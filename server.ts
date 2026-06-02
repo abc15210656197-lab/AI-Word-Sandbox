@@ -121,6 +121,12 @@ async function startServer() {
         tempPath = req.file.path;
       }
 
+      const isProxy = isPlaceholderKey(userApiKey) && isPlaceholderKey(process.env.GEMINI_API_KEY || "");
+      if (isProxy) {
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+        return res.status(400).json({ error: "API key not valid. Please pass a valid API key. (Proxy does not support direct backend File API)." });
+      }
+
       const fileInfo = await uploadClient.files.upload({
         file: tempPath,
         config: {
@@ -315,6 +321,12 @@ async function startServer() {
     return `${protocol}://${host}/api/auth/google/callback`;
   };
 
+  app.get("/api/auth/google/config", (req, res) => {
+    // Return App ID (the first part of the client ID)
+    const appId = GOOGLE_CLIENT_ID ? GOOGLE_CLIENT_ID.split('-')[0] : "";
+    res.json({ appId });
+  });
+
   app.get("/api/auth/google/url", (req, res) => {
     if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
       return res.status(500).json({ error: "Google OAuth credentials not configured" });
@@ -382,7 +394,7 @@ async function startServer() {
 
   // Proxy Google Drive search
   app.post("/api/drive/list", async (req, res) => {
-    const { tokens, query } = req.body;
+    const { tokens, query, folderId } = req.body;
     if (!tokens) return res.status(401).json({ error: "No tokens provided" });
 
     try {
@@ -390,11 +402,24 @@ async function startServer() {
       oauth2Client.setCredentials(tokens);
 
       const drive = google.drive({ version: "v3", auth: oauth2Client });
+      
+      let q = "";
+      if (query) {
+        // If searching, search in all files and folders
+        q = `name contains '${query.replace(/'/g, "\\'")}' and trashed = false`;
+      } else if (folderId) {
+        // Find files inside the specified folder
+        q = `'${folderId}' in parents and trashed = false`;
+      } else {
+        // Default: root folder
+        q = `'root' in parents and trashed = false`;
+      }
+
       const response = await drive.files.list({
-        pageSize: 50,
+        pageSize: 100,
         fields: "nextPageToken, files(id, name, mimeType, size, modifiedTime, thumbnailLink, iconLink)",
-        q: query || "mimeType = 'application/pdf' or mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' or mimeType = 'image/jpeg' or mimeType = 'image/png'",
-        orderBy: "modifiedTime desc"
+        q: q,
+        orderBy: "folder, name"
       });
 
       res.json(response.data);
@@ -403,6 +428,7 @@ async function startServer() {
       res.status(500).json({ error: error.message });
     }
   });
+
 
   // Proxy Google Drive file content
   app.post("/api/drive/download", async (req, res) => {
@@ -415,18 +441,35 @@ async function startServer() {
 
       const drive = google.drive({ version: "v3", auth: oauth2Client });
       
-      const fileMeta = await drive.files.get({ fileId, fields: "name, mimeType" });
-      const response = await drive.files.get(
-        { fileId, alt: "media" },
-        { responseType: "arraybuffer" }
-      );
+      const fileMeta = await drive.files.get({ fileId, fields: "name, mimeType, size" });
+      const mimeType = fileMeta.data.mimeType || "";
+      let downloadResponse;
 
-      res.setHeader("Content-Type", fileMeta.data.mimeType || "application/octet-stream");
-      res.setHeader("Content-Disposition", `attachment; filename="${fileMeta.data.name}"`);
-      res.send(Buffer.from(response.data as ArrayBuffer));
+      if (mimeType.startsWith('application/vnd.google-apps.')) {
+        // Handle Google native files (Doc, Sheet, Slide) by exporting to PDF
+        console.log(`Exporting Google native file ${fileId} (${mimeType}) to PDF`);
+        downloadResponse = await drive.files.export(
+          { fileId, mimeType: 'application/pdf' },
+          { responseType: "arraybuffer" }
+        );
+        res.setHeader("Content-Type", "application/pdf");
+        const encodedName = encodeURIComponent((fileMeta.data.name || 'document') + '.pdf');
+        res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodedName}`);
+      } else {
+        // Handle binary files
+        downloadResponse = await drive.files.get(
+          { fileId, alt: "media" },
+          { responseType: "arraybuffer" }
+        );
+        res.setHeader("Content-Type", mimeType || "application/octet-stream");
+        const encodedName = encodeURIComponent(fileMeta.data.name || 'file');
+        res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodedName}`);
+      }
+
+      res.send(Buffer.from(downloadResponse.data as ArrayBuffer));
     } catch (error: any) {
       console.error("Drive download error:", error);
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ error: error.message || "Failed to download file from Drive" });
     }
   });
 
