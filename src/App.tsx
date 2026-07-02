@@ -5540,9 +5540,9 @@ const MathText = ({ text, className, style, contentEditable, onBlur, isFocused, 
               >
                 {/* Background layer: completely separated, pure CSS layout to keep backdrop-filter perfectly stable without transforms */}
                 <div className={cn(
-                  "absolute inset-0 border -z-10 backdrop-blur-md rounded-2xl shadow-sm transition-colors duration-300",
+                  "absolute inset-0 border -z-10 backdrop-blur-[12px] rounded-2xl shadow-sm transition-colors duration-300 transform-gpu",
                   darkMode ? "bg-black/20 border-white/10" : "bg-white/20 border-black/5"
-                )} />
+                )} style={{ WebkitBackdropFilter: 'blur(12px)', backdropFilter: 'blur(12px)', WebkitTransform: 'translateZ(0)', backfaceVisibility: 'hidden' }} />
 
                 {/* Content layer: statically positioned, no layout scale transforms can affect the text */}
                 <div className={cn(
