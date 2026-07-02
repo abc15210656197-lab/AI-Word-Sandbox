@@ -70,15 +70,18 @@ async function startServer() {
     res.json({ status: "ok" });
   });
 
-  app.get("/api/debug-env", (req, res) => {
-    res.json({
-      geminiKey: process.env.GEMINI_API_KEY,
-      googleKey: process.env.GOOGLE_API_KEY,
-      viteKey: process.env.VITE_GEMINI_API_KEY,
-      nextKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY,
-      keys: Object.keys(process.env).filter(k => k.includes("API") || k.includes("GEMINI"))
+  if (process.env.NODE_ENV !== "production") {
+    app.get("/api/debug-env", (req, res) => {
+      res.json({
+        geminiKeyConfigured: Boolean(process.env.GEMINI_API_KEY),
+        googleKeyConfigured: Boolean(process.env.GOOGLE_API_KEY),
+        viteGeminiKeyConfigured: Boolean(process.env.VITE_GEMINI_API_KEY),
+        matchingKeyNames: Object.keys(process.env)
+          .filter(k => k.includes("API") || k.includes("GEMINI"))
+          .sort()
+      });
     });
-  });
+  }
 
 
 
